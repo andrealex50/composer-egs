@@ -1,0 +1,706 @@
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+import './App.css';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const DEMO_EMAIL = 'testuser@example.com';
+const DEMO_PASSWORD = 'password123!';
+const SSO_STATE_KEY = 'flashsale_sso_state';
+
+const extractErrorMessage = (error, fallback = 'Request failed') => {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map((item) => item?.msg || JSON.stringify(item)).join('; ');
+  if (detail && typeof detail === 'object') {
+    return detail.detail || detail.message || JSON.stringify(detail);
+  }
+  return error?.message || fallback;
+};
+
+const extractErrorDetailObject = (error) => {
+  const detail = error?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    return detail;
+  }
+  return null;
+};
+
+function App() {
+  const [events, setEvents] = useState([]);
+  const [loadingEvents, setLoadingEvents] = useState(true);
+  const [token, setToken] = useState(localStorage.getItem('flashsale_token'));
+  const [user, setUser] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [flowInfo, setFlowInfo] = useState('');
+  const [walletActionUrl, setWalletActionUrl] = useState('');
+  const [eventsError, setEventsError] = useState('');
+  const [activeTab, setActiveTab] = useState('overview');
+  const [toast, setToast] = useState(null);
+  const [ssoLoading, setSsoLoading] = useState(false);
+  const [checkoutLoadingEventId, setCheckoutLoadingEventId] = useState('');
+  const [quantityByEvent, setQuantityByEvent] = useState({});
+
+  const [reservationEventId, setReservationEventId] = useState('');
+  const [reservationQty, setReservationQty] = useState(1);
+  const [reservationResult, setReservationResult] = useState(null);
+  const [reservationStatusTicketId, setReservationStatusTicketId] = useState('');
+  const [reservationStatusResult, setReservationStatusResult] = useState(null);
+
+  const [payments, setPayments] = useState([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [paymentsError, setPaymentsError] = useState('');
+
+  const [refundPaymentId, setRefundPaymentId] = useState('');
+  const [refundTicketIds, setRefundTicketIds] = useState('');
+  const [refundResult, setRefundResult] = useState(null);
+  const [refundError, setRefundError] = useState('');
+
+  useEffect(() => {
+    fetchEvents();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('flashsale_token', token || '');
+    if (!token) {
+      localStorage.removeItem('flashsale_token');
+      setUser(null);
+      setWalletActionUrl('');
+      return;
+    }
+    fetchProfile(token);
+    fetchPayments(token);
+  }, [token]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3600);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const returnedState = params.get('state');
+    const status = params.get('status');
+    const storedState = localStorage.getItem(SSO_STATE_KEY);
+
+    if (code) {
+      const exchangeCode = async () => {
+        if (!returnedState || !storedState || returnedState !== storedState) {
+          setAuthError('SSO validation failed (invalid state).');
+          setToast({ type: 'error', text: 'SSO login failed: state mismatch.' });
+          localStorage.removeItem(SSO_STATE_KEY);
+          const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+          window.history.replaceState({}, document.title, cleanUrl);
+          return;
+        }
+
+        try {
+          const res = await axios.post(`${API_BASE_URL}/api/auth/exchange-code`, { code });
+          if (!res.data?.access_token) {
+            throw new Error('No access_token in exchange response');
+          }
+          setToken(res.data.access_token);
+          setAuthError('');
+          setToast({ type: 'success', text: 'SSO login successful.' });
+          setActiveTab('overview');
+        } catch (error) {
+          setAuthError('SSO exchange failed: ' + extractErrorMessage(error, 'Could not exchange authorization code'));
+          setToast({ type: 'error', text: 'SSO login failed during token exchange.' });
+        } finally {
+          localStorage.removeItem(SSO_STATE_KEY);
+          const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+          window.history.replaceState({}, document.title, cleanUrl);
+        }
+      };
+
+      exchangeCode();
+      return;
+    }
+
+    if (!status) return;
+
+    if (status === 'success') {
+      setFlowInfo('Checkout completed. Refreshing your payments history.');
+      setToast({ type: 'success', text: 'Payment completed successfully.' });
+      if (token) fetchPayments(token);
+    } else if (status === 'cancel') {
+      setFlowInfo('Checkout was canceled.');
+      setToast({ type: 'warning', text: 'Checkout canceled. No payment was captured.' });
+    }
+
+    const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }, [token]);
+
+  const startSsoFlow = async (mode) => {
+    setSsoLoading(true);
+    setAuthError('');
+    try {
+      const redirectUri = `${window.location.origin}${window.location.pathname}`;
+      const res = await axios.get(`${API_BASE_URL}/api/auth/sso/authorize-url`, {
+        params: {
+          mode,
+          redirect_uri: redirectUri,
+        },
+      });
+
+      const url = res.data?.authorization_url;
+      const state = res.data?.state;
+      if (!url || !state) {
+        throw new Error('Missing authorization_url/state from SSO bootstrap');
+      }
+
+      localStorage.setItem(SSO_STATE_KEY, state);
+      window.location.href = url;
+    } catch (error) {
+      setAuthError('SSO bootstrap failed: ' + extractErrorMessage(error, 'Could not start SSO flow'));
+      setToast({ type: 'error', text: 'SSO is unavailable. You can use API login.' });
+      setSsoLoading(false);
+    }
+  };
+
+  const fetchEvents = () => {
+    setLoadingEvents(true);
+    setEventsError('');
+    axios.get(`${API_BASE_URL}/api/events`)
+      .then((res) => {
+        setEvents(res.data?.data || []);
+        setLoadingEvents(false);
+      })
+      .catch((err) => {
+        console.error('Error fetching events:', err);
+        setEventsError('Could not load events: ' + extractErrorMessage(err, 'Could not load events'));
+        setLoadingEvents(false);
+      });
+  };
+
+  const loginDummy = async () => {
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/auth/login`, {
+        email: DEMO_EMAIL,
+        password: DEMO_PASSWORD
+      });
+      setToken(res.data.access_token);
+      setAuthError('');
+      setToast({ type: 'success', text: 'Signed in. You can purchase tickets now.' });
+      setActiveTab('overview');
+    } catch (e) {
+      console.error('Login detail', e);
+      setAuthError('Login failed: ' + extractErrorMessage(e, 'Make sure the user is registered.'));
+    }
+  };
+
+  const registerDummy = async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/auth/register`, {
+        email: DEMO_EMAIL,
+        password: DEMO_PASSWORD,
+        full_name: 'Test User'
+      });
+      setToast({ type: 'success', text: 'Registration successful. You can now sign in.' });
+      setAuthError('');
+    } catch (e) {
+      setAuthError('Registration failed: ' + extractErrorMessage(e, 'Could not register user'));
+    }
+  };
+
+  const fetchProfile = async (activeToken) => {
+    setProfileLoading(true);
+    setProfileError('');
+    try {
+      const config = { headers: { Authorization: `Bearer ${activeToken}` } };
+      const res = await axios.get(`${API_BASE_URL}/api/auth/me`, config);
+      setUser(res.data || null);
+    } catch (error) {
+      setUser(null);
+      const statusCode = error?.response?.status;
+      if (statusCode === 401 || statusCode === 403) {
+        setToken(null);
+        setAuthError('Session expired. Please login again.');
+      }
+      setProfileError(extractErrorMessage(error, 'Could not load profile'));
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      if (token) {
+        await axios.post(
+          `${API_BASE_URL}/api/auth/logout`,
+          {},
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+      }
+    } catch (_error) {
+      // Ignore logout errors and clear local state anyway.
+    } finally {
+      setToken(null);
+      setUser(null);
+      setPayments([]);
+      setReservationResult(null);
+      setReservationStatusResult(null);
+      setRefundResult(null);
+      setRefundError('');
+      setActiveTab('overview');
+      setToast({ type: 'info', text: 'Session closed.' });
+    }
+  };
+
+  const fetchPayments = async (activeToken = token) => {
+    if (!activeToken) return;
+    setPaymentsLoading(true);
+    setPaymentsError('');
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/payments`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      setPayments(res.data?.items || []);
+    } catch (error) {
+      setPaymentsError('Could not load payments: ' + extractErrorMessage(error, 'Could not load payments'));
+    } finally {
+      setPaymentsLoading(false);
+    }
+  };
+
+  const reserveTickets = async () => {
+    if (!reservationEventId) {
+      setAuthError('Select an event to reserve tickets.');
+      return;
+    }
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/reservations`, {
+        event_id: reservationEventId,
+        quantity: Number(reservationQty) || 1,
+      });
+      setReservationResult(res.data);
+      setReservationStatusTicketId(res.data?.tickets?.[0]?.id || '');
+      setAuthError('');
+      setToast({ type: 'success', text: `Reserved ${res.data?.tickets?.length || 0} ticket(s).` });
+    } catch (error) {
+      setAuthError('Reservation failed: ' + extractErrorMessage(error, 'Could not reserve tickets'));
+    }
+  };
+
+  const checkReservationStatus = async () => {
+    if (!reservationStatusTicketId) return;
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/reservations/${reservationStatusTicketId}`);
+      setReservationStatusResult(res.data);
+      setToast({ type: 'info', text: `Reservation status: ${res.data?.status || 'unknown'}.` });
+    } catch (error) {
+      setAuthError('Reservation status failed: ' + extractErrorMessage(error, 'Could not load reservation status'));
+    }
+  };
+
+  const handleRefund = async () => {
+    if (!token) {
+      setRefundError('Login required to request refund.');
+      return;
+    }
+    if (!refundPaymentId.trim()) {
+      setRefundError('Payment ID is required.');
+      return;
+    }
+
+    const ticketIds = refundTicketIds
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+    try {
+      const res = await axios.post(
+        `${API_BASE_URL}/api/refund`,
+        {
+          payment_id: refundPaymentId.trim(),
+          ticket_ids: ticketIds,
+          reason: 'requested_by_customer',
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setRefundResult(res.data);
+      setRefundError('');
+      fetchPayments(token);
+      setToast({ type: 'success', text: 'Refund requested successfully.' });
+    } catch (error) {
+      setRefundResult(null);
+      setRefundError(extractErrorMessage(error, 'Refund failed'));
+    }
+  };
+
+  const handleCheckout = async (eventId) => {
+    if (!token) {
+      setAuthError('Please sign in before checkout.');
+      return;
+    }
+
+    const quantity = Number(quantityByEvent[eventId] || 1);
+    setCheckoutLoadingEventId(eventId);
+    setFlowInfo('Redirecting to hosted checkout...');
+    setWalletActionUrl('');
+    
+    try {
+      const payload = {
+        event_id: eventId,
+        quantity,
+        success_url: window.location.href.split('?')[0] + '?status=success',
+        cancel_url: window.location.href.split('?')[0] + '?status=cancel',
+        amount_cents: quantity * 1500
+      };
+      
+      const config = { headers: { Authorization: `Bearer ${token}` } };
+      const res = await axios.post(`${API_BASE_URL}/api/checkout`, payload, config);
+      
+      if (res.data && res.data.checkout_url) {
+        window.location.href = res.data.checkout_url;
+      } else {
+        setToast({ type: 'warning', text: 'Checkout started, but no redirect URL was returned.' });
+      }
+    } catch (error) {
+      const detailObject = extractErrorDetailObject(error);
+      if (detailObject?.code === 'wallet_setup_required') {
+        const guidance = detailObject?.message || 'Wallet setup is required before checkout.';
+        setFlowInfo(guidance);
+        setWalletActionUrl(detailObject?.action_url || '');
+        setToast({ type: 'warning', text: guidance });
+      } else {
+        setToast({ type: 'error', text: 'Checkout error: ' + extractErrorMessage(error, 'Could not start checkout') });
+      }
+    } finally {
+      setCheckoutLoadingEventId('');
+    }
+  };
+
+  const setEventQuantity = (eventId, value) => {
+    const parsed = Math.max(1, Math.min(10, Number(value) || 1));
+    setQuantityByEvent((prev) => ({ ...prev, [eventId]: parsed }));
+  };
+
+  const usePaymentInRefund = (paymentId) => {
+    setRefundPaymentId(paymentId);
+    setActiveTab('refund');
+  };
+
+  const useEventInReservation = (eventId) => {
+    setReservationEventId(eventId);
+    setActiveTab('overview');
+  };
+
+  const statusClass = (statusValue) => {
+    const status = String(statusValue || '').toLowerCase();
+    if (status.includes('success') || status.includes('succeeded') || status.includes('paid') || status.includes('complete')) {
+      return 'badge badge-success';
+    }
+    if (status.includes('pending') || status.includes('open') || status.includes('processing')) {
+      return 'badge badge-warning';
+    }
+    if (status.includes('fail') || status.includes('cancel') || status.includes('refund')) {
+      return 'badge badge-danger';
+    }
+    return 'badge badge-neutral';
+  };
+
+  const formatDate = (value) => {
+    if (!value) return 'Date TBD';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleString();
+  };
+
+  const paymentItems = payments || [];
+
+  return (
+    <div className="app-shell">
+      <div className="bg-orb orb-a" />
+      <div className="bg-orb orb-b" />
+
+      <header className="hero">
+        <div className="hero-tag">Composer Demo Ready</div>
+        <h1>FlashSale Portal</h1>
+        <p className="hero-subtitle">Fast event checkout orchestration across Auth, Inventory and Payment.</p>
+
+        <div className="hero-steps">
+          <span>1. Sign in</span>
+          <span>2. Pick event</span>
+          <span>3. Complete checkout</span>
+          <span>4. Verify payment</span>
+        </div>
+      </header>
+
+      {toast && (
+        <div className={`toast toast-${toast.type}`}>
+          {toast.text}
+        </div>
+      )}
+
+      {flowInfo && <div className="flow-note">{flowInfo}</div>}
+      {walletActionUrl && (
+        <div className="flow-note">
+          Wallet setup required.
+          {' '}
+          <a href={walletActionUrl} target="_blank" rel="noreferrer">Open wallet setup</a>
+        </div>
+      )}
+
+      <section className="auth-panel">
+        <div className="auth-status copy-block">
+          {token ? (
+            <p>Signed in as <strong>{user?.email || DEMO_EMAIL}</strong>.</p>
+          ) : (
+            <>
+              <p>Welcome. Use the demo account to run the full buying flow.</p>
+              <p className="hint">Demo login: {DEMO_EMAIL} / {DEMO_PASSWORD}</p>
+              <p className="hint">You can also use SSO Login/Register via the Auth UI.</p>
+            </>
+          )}
+        </div>
+
+        <div className="auth-buttons">
+          {token ? (
+            <button className="btn btn-outline" onClick={handleLogout}>Logout</button>
+          ) : (
+            <>
+              <button className="btn btn-outline" onClick={() => startSsoFlow('register')} disabled={ssoLoading}>
+                {ssoLoading ? 'Loading...' : 'SSO Register'}
+              </button>
+              <button className="btn btn-outline" onClick={() => startSsoFlow('login')} disabled={ssoLoading}>
+                {ssoLoading ? 'Loading...' : 'SSO Login'}
+              </button>
+              <button className="btn btn-outline" onClick={registerDummy}>Register</button>
+              <button className="btn" onClick={loginDummy}>Login</button>
+            </>
+          )}
+        </div>
+        {authError && <span className="error-msg">{authError}</span>}
+      </section>
+
+      <section className="events-section">
+        <div className="section-head">
+          <h2>Live Events</h2>
+          <button className="btn btn-outline" onClick={fetchEvents}>Refresh Events</button>
+        </div>
+
+        {!token && <div className="login-gate">Login is required to purchase tickets.</div>}
+
+        {loadingEvents ? (
+          <div className="skeleton-grid">
+            {[1, 2, 3].map((i) => <div key={i} className="skeleton-card" />)}
+          </div>
+        ) : (
+          <div className="events-grid">
+            {eventsError && <p className="error-msg wide">{eventsError}</p>}
+            {events.length === 0 && <p className="hint wide">No events found.</p>}
+            {events.map((ev) => {
+              const qty = quantityByEvent[ev.id] || 1;
+              const buyingThis = checkoutLoadingEventId === ev.id;
+              return (
+                <article key={ev.id} className="event-card">
+                  <div className="event-header-row">
+                    <h3>{ev.name || 'Unnamed Event'}</h3>
+                    <span className="badge badge-neutral">{ev.status || 'draft'}</span>
+                  </div>
+
+                  <p className="event-description">{ev.description || 'No description provided.'}</p>
+
+                  <div className="event-meta">
+                    <span>{ev.venue || 'Venue TBD'}</span>
+                    <span>{formatDate(ev.date)}</span>
+                  </div>
+
+                  <div className="event-action">
+                    <div className="qty-row">
+                      <label>Qty</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={qty}
+                        onChange={(e) => setEventQuantity(ev.id, e.target.value)}
+                      />
+                    </div>
+
+                    <div className="event-buttons">
+                      <button
+                        className="btn btn-outline"
+                        onClick={() => useEventInReservation(ev.id)}
+                      >
+                        Use Event ID
+                      </button>
+
+                      <button
+                        className="btn"
+                        onClick={() => handleCheckout(ev.id)}
+                        disabled={!token || buyingThis}
+                      >
+                        {buyingThis ? 'Redirecting...' : token ? 'Buy Ticket(s)' : 'Login to Buy'}
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {token && (
+        <section className="workspace">
+          <div className="workspace-tabs">
+            <button
+              className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
+              onClick={() => setActiveTab('overview')}
+            >
+              Overview
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'payments' ? 'active' : ''}`}
+              onClick={() => setActiveTab('payments')}
+            >
+              Payments
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'refund' ? 'active' : ''}`}
+              onClick={() => setActiveTab('refund')}
+            >
+              Refund
+            </button>
+          </div>
+
+          {activeTab === 'overview' && (
+            <div className="panel-grid">
+              <article className="panel-card reveal">
+                <h2>Profile</h2>
+                <p><strong>Email:</strong> {profileLoading ? 'Loading...' : (user?.email || 'N/A')}</p>
+                <p><strong>Name:</strong> {profileLoading ? 'Loading...' : (user?.full_name || 'N/A')}</p>
+                {walletActionUrl && (
+                  <p className="hint">
+                    Wallet not configured.
+                    {' '}
+                    <a href={walletActionUrl} target="_blank" rel="noreferrer">Setup now</a>
+                  </p>
+                )}
+                {profileError && <p className="error-msg">Profile error: {profileError}</p>}
+                <button className="btn btn-outline" onClick={() => fetchProfile(token)}>Refresh Profile</button>
+              </article>
+
+              <article className="panel-card reveal">
+                <h2>Reservations</h2>
+                <label>Event ID</label>
+                <input
+                  value={reservationEventId}
+                  onChange={(e) => setReservationEventId(e.target.value)}
+                  placeholder="Paste event id"
+                />
+                <label>Quantity</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={reservationQty}
+                  onChange={(e) => setReservationQty(e.target.value)}
+                />
+                <button className="btn" onClick={reserveTickets}>Reserve Tickets</button>
+                <p className="hint">Reservation only holds tickets. Use Buy Ticket(s) to create a payment.</p>
+                {reservationResult && (
+                  <p className="hint">
+                    Reserved: {reservationResult?.tickets?.length || 0} tickets
+                  </p>
+                )}
+                <label>Reservation ticket id</label>
+                <input
+                  value={reservationStatusTicketId}
+                  onChange={(e) => setReservationStatusTicketId(e.target.value)}
+                  placeholder="Ticket id to check"
+                />
+                <button className="btn btn-outline" onClick={checkReservationStatus}>Check Status</button>
+                {reservationStatusResult && (
+                  <p className="hint">Status: <span className={statusClass(reservationStatusResult.status)}>{reservationStatusResult.status}</span></p>
+                )}
+              </article>
+            </div>
+          )}
+
+          {activeTab === 'payments' && (
+            <div className="payments-board reveal">
+              <div className="section-head">
+                <h2>Payments History</h2>
+                <button className="btn btn-outline" onClick={() => fetchPayments(token)}>Refresh Payments</button>
+              </div>
+
+              {paymentsLoading && (
+                <div className="skeleton-grid payments-skeleton">
+                  {[1, 2].map((i) => <div key={i} className="skeleton-card" />)}
+                </div>
+              )}
+
+              {paymentsError && <p className="error-msg wide">{paymentsError}</p>}
+
+              {!paymentsLoading && paymentItems.length === 0 && (
+                <p className="hint wide">No payments yet. Complete a checkout from an event card.</p>
+              )}
+
+              <div className="payments-grid">
+                {!paymentsLoading && paymentItems.slice(0, 8).map((p) => (
+                  <article key={p.id} className="payment-card">
+                    <div className="payment-top">
+                      <h3>{p.amount} {p.currency?.toUpperCase?.() || ''}</h3>
+                      <span className={statusClass(p.status)}>{p.status}</span>
+                    </div>
+                    <p className="payment-id">{p.id}</p>
+                    <p className="hint">Created: {formatDate(p.created_at)}</p>
+                    <button className="btn btn-outline" onClick={() => usePaymentInRefund(p.id)}>
+                      Use in Refund
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'refund' && (
+            <article className="panel-card refund-card reveal">
+              <h2>Request Refund</h2>
+              <label>Payment ID</label>
+              <input
+                value={refundPaymentId}
+                onChange={(e) => setRefundPaymentId(e.target.value)}
+                placeholder="Payment UUID"
+              />
+
+              <label>Ticket IDs (comma separated)</label>
+              <input
+                value={refundTicketIds}
+                onChange={(e) => setRefundTicketIds(e.target.value)}
+                placeholder="ticket-1,ticket-2"
+              />
+
+              <button className="btn" onClick={handleRefund}>Request Refund</button>
+
+              {refundError && <p className="error-msg">{refundError}</p>}
+              {refundResult && <p className="hint">Refund status: <span className={statusClass(refundResult.status)}>{refundResult.status}</span></p>}
+
+              {paymentItems.length > 0 && (
+                <div className="quick-links">
+                  <p className="hint">Quick pick a recent payment:</p>
+                  <div className="quick-link-list">
+                    {paymentItems.slice(0, 3).map((p) => (
+                      <button key={p.id} className="pill-btn" onClick={() => setRefundPaymentId(p.id)}>
+                        {p.id.slice(0, 8)}...
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+export default App;

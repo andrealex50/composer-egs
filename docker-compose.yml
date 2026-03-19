@@ -1,0 +1,211 @@
+services:
+  # ═══════════════════════════════════════════════════════════════
+  # COMPOSER / API GATEWAY  (porta 8080)
+  # ═══════════════════════════════════════════════════════════════
+  composer:
+    build: .
+    container_name: composer
+    ports:
+      - "8080:8000"
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8000
+      AUTH_BROWSER_URL: ${AUTH_BROWSER_URL:-http://localhost:8001}
+      AUTH_SSO_CLIENT_ID: ${AUTH_SSO_CLIENT_ID:-flash-sale}
+      INVENTORY_SERVICE_URL: http://inventory-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+      INVENTORY_API_KEY: sk_test_inventory_dev_key
+      # Recomendada: tenant key criada no Payment (/api/v1/admin/api-keys)
+      PAYMENT_API_KEY: ${PAYMENT_API_KEY:-admin-dev-key-2024}
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
+      EVENT_MUTATIONS_REQUIRE_ADMIN: ${EVENT_MUTATIONS_REQUIRE_ADMIN:-true}
+      EVENT_ADMIN_ROLES: ${EVENT_ADMIN_ROLES:-admin}
+    depends_on:
+      auth-service:
+        condition: service_started
+      inventory-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    networks:
+      - flashsale
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════
+  # AUTH SERVICE + Postgres + Redis
+  # ═══════════════════════════════════════════════════════════════
+  auth-service:
+    build: ../EGS/auth-service
+    container_name: auth-service
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql://user:password@auth-postgres:5432/auth_db
+      REDIS_URL: redis://auth-redis:6379/0
+      SECRET_KEY: super-secret-jwt-key-for-dev-2024
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
+      AUTH_CLIENTS_JSON: '{"flash-sale":["http://localhost:5173/"],"payment":["http://localhost:8002/"]}'
+      SERVICE_PUBLIC_BASE_URL: ${AUTH_BROWSER_URL:-http://localhost:8001}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      REFRESH_TOKEN_EXPIRE_DAYS: 7
+      DEBUG: "False"
+    depends_on:
+      auth-postgres:
+        condition: service_healthy
+      auth-redis:
+        condition: service_healthy
+    networks:
+      - flashsale
+    restart: unless-stopped
+
+  auth-postgres:
+    image: postgres:15-alpine
+    container_name: auth-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: auth_db
+    volumes:
+      - auth_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flashsale
+
+  auth-redis:
+    image: redis:7-alpine
+    container_name: auth-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flashsale
+
+  # ═══════════════════════════════════════════════════════════════
+  # INVENTORY SERVICE + Postgres + Redis
+  # ═══════════════════════════════════════════════════════════════
+  inventory-service:
+    build: ../inventory-service-egs
+    container_name: inventory-service
+    expose:
+      - "8000"
+    environment:
+      APP_NAME: Inventory Service
+      APP_VERSION: 1.0.0
+      DEBUG: "true"
+      DATABASE_URL: postgresql+asyncpg://inventory_user:inventory_pass@inv-postgres:5432/inventory_db_fresh
+      REDIS_URL: redis://inv-redis:6379/0
+      API_KEY: sk_test_inventory_dev_key
+      RATE_LIMIT_PER_MINUTE: 120
+      RESERVATION_TTL_MINUTES: 15
+    depends_on:
+      inv-postgres:
+        condition: service_healthy
+      inv-redis:
+        condition: service_healthy
+    networks:
+      - flashsale
+    restart: unless-stopped
+
+  inv-postgres:
+    image: postgres:16-alpine
+    container_name: inv-postgres
+    environment:
+      POSTGRES_USER: inventory_user
+      POSTGRES_PASSWORD: inventory_pass
+      POSTGRES_DB: inventory_db_fresh
+    volumes:
+      - inv_pg_data_fresh:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory_user -d inventory_db_fresh"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flashsale
+
+  inv-redis:
+    image: redis:7-alpine
+    container_name: inv-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flashsale
+
+  # ═══════════════════════════════════════════════════════════════
+  # PAYMENT SERVICE + Postgres + Redis
+  # ═══════════════════════════════════════════════════════════════
+  payment-service:
+    build: ../Payment_service
+    container_name: payment-service
+    ports:
+      - "8002:8000"
+    environment:
+      APP_NAME: Payment Service
+      APP_VERSION: 1.0.0
+      DEBUG: "true"
+      ENVIRONMENT: development
+      # Chave bootstrap de admin para gerir tenant keys
+      ADMIN_API_KEY: ${PAYMENT_ADMIN_API_KEY:-admin-dev-key-2024}
+      DATABASE_URL: postgresql+asyncpg://payment_user:payment_pass@pay-postgres:5432/payment_db
+      REDIS_URL: redis://pay-redis:6379/0
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+      RATE_LIMIT_REQUESTS: 100
+      RATE_LIMIT_WINDOW_SECONDS: 60
+      LOG_LEVEL: INFO
+    depends_on:
+      pay-postgres:
+        condition: service_healthy
+      pay-redis:
+        condition: service_healthy
+    networks:
+      - flashsale
+    restart: unless-stopped
+
+  pay-postgres:
+    image: postgres:16-alpine
+    container_name: pay-postgres
+    environment:
+      POSTGRES_USER: payment_user
+      POSTGRES_PASSWORD: payment_pass
+      POSTGRES_DB: payment_db
+    volumes:
+      - pay_pg_data_fresh:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_user -d payment_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      flashsale:
+        aliases:
+          - postgres
+
+  pay-redis:
+    image: redis:7-alpine
+    container_name: pay-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flashsale
+
+volumes:
+  auth_pg_data:
+  inv_pg_data_fresh:
+  pay_pg_data_fresh:
+
+networks:
+  flashsale:
+    driver: bridge
