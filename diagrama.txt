@@ -9,7 +9,7 @@ graph TB
     subgraph GATEWAY["Composer / API Gateway — FastAPI :8080"]
         COMPOSER["<b>Composer / API Gateway</b><br/>FastAPI"]
         
-        AUTH_ROUTES["<b>Auth</b><br/>POST /api/auth/register<br/>POST /api/auth/login<br/>POST /api/auth/refresh<br/>GET /api/auth/me<br/>POST /api/auth/logout<br/>GET /api/auth/sso/authorize-url<br/>POST /api/auth/exchange-code"]
+        AUTH_ROUTES["<b>Auth</b><br/>POST /api/auth/register<br/>POST /api/auth/login<br/>POST /api/auth/refresh<br/>GET /api/auth/me<br/>POST /api/auth/logout<br/>POST /api/auth/forgot-password<br/>POST /api/auth/reset-password<br/>DELETE /api/auth/me"]
         EVENT_ROUTES["<b>Events</b><br/>GET|POST /api/events<br/>GET|PUT|DEL /api/events/{id}<br/>POST /api/events/{id}/tickets<br/>GET /api/events/{id}/tickets<br/>GET /api/tickets/{id}/availability"]
         RES_ROUTES["<b>Reservations</b><br/>POST /api/reservations<br/>GET /api/reservations/{id}"]
         PAY_ROUTES["<b>Payments</b><br/>GET|POST /api/payments<br/>GET /api/payments/{id}<br/>POST /api/payments/{id}/confirm<br/>POST /api/payments/{id}/cancel<br/>GET /api/payments/{id}/receipt"]
@@ -18,7 +18,7 @@ graph TB
 
     subgraph SERVICES["Serviços de Negócio Independentes"]
         subgraph AUTH_BOX["Auth Service"]
-            AUTH["Auth API<br/>Gerenciamento de identidades e SSO"]
+            AUTH["Auth API<br/>Gerenciamento de identidades, JWT e password reset"]
         end
 
         subgraph INV_BOX["Inventory Service"]

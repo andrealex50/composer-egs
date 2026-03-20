@@ -42,7 +42,7 @@ PASSWORD="Teste1234!"
 echo "3. POST /api/auth/register"
 REG_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth/register" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"full_name\":\"Composer E2E\",\"role\":\"admin\"}")
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"full_name\":\"Composer E2E\"}")
 [[ "$REG_CODE" =~ ^(200|201)$ ]] && pass || fail "register expected 200/201, got $REG_CODE"
 
 echo "4. POST /api/auth/login"
@@ -64,12 +64,25 @@ REF_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth/refres
   -d "{\"refresh_token\":\"$REFRESH\"}")
 [ "$REF_CODE" = "200" ] && pass || fail "refresh expected 200, got $REF_CODE"
 
-echo "7. POST /api/auth/logout"
+echo "7. POST /api/auth/forgot-password"
+FORGOT=$(curl -s -X POST "$BASE/api/auth/forgot-password" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL\"}")
+FORGOT_MSG=$(echo "$FORGOT" | json_get message)
+[ "$FORGOT_MSG" = "If the account exists, a password reset link was sent" ] && pass || fail "forgot-password message inesperada"
+
+echo "8. POST /api/auth/reset-password com token invalido"
+RESET_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth/reset-password" \
+  -H "Content-Type: application/json" \
+  -d '{"token":"invalid-token","new_password":"ChangedPass123"}')
+[ "$RESET_CODE" = "401" ] && pass || fail "reset-password invalido expected 401, got $RESET_CODE"
+
+echo "9. POST /api/auth/logout"
 LOGOUT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth/logout" \
   -H "Authorization: Bearer $TOKEN")
 [[ "$LOGOUT_CODE" =~ ^(200|204)$ ]] && pass || fail "logout expected 200/204, got $LOGOUT_CODE"
 
-echo "8. Re-login para continuar testes"
+echo "10. Re-login para continuar testes"
 LOGIN=$(curl -s -X POST "$BASE/api/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")
@@ -77,7 +90,7 @@ TOKEN=$(echo "$LOGIN" | json_get access_token)
 [ -n "$TOKEN" ] && pass || fail "re-login sem token"
 
 section "INVENTORY SERVICE VIA COMPOSER"
-echo "9. POST /api/events"
+echo "11. POST /api/events"
 EVENT=$(curl -s -X POST "$BASE/api/events" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
@@ -85,15 +98,15 @@ EVENT=$(curl -s -X POST "$BASE/api/events" \
 EVENT_ID=$(echo "$EVENT" | json_get id)
 [ -n "$EVENT_ID" ] && pass || fail "evento nao criado"
 
-echo "10. GET /api/events"
+echo "12. GET /api/events"
 EVENTS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/events")
 [ "$EVENTS_CODE" = "200" ] && pass || fail "events list expected 200, got $EVENTS_CODE"
 
-echo "11. GET /api/events/{id}"
+echo "13. GET /api/events/{id}"
 SINGLE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/events/$EVENT_ID")
 [ "$SINGLE_CODE" = "200" ] && pass || fail "event detail expected 200, got $SINGLE_CODE"
 
-echo "12. PUT /api/events/{id}"
+echo "14. PUT /api/events/{id}"
 UPD=$(curl -s -X PUT "$BASE/api/events/$EVENT_ID" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
@@ -101,7 +114,7 @@ UPD=$(curl -s -X PUT "$BASE/api/events/$EVENT_ID" \
 UPD_STATUS=$(echo "$UPD" | json_get status)
 [ "$UPD_STATUS" = "published" ] && pass || fail "status do evento nao ficou published"
 
-echo "13. POST /api/events/{id}/tickets"
+echo "15. POST /api/events/{id}/tickets"
 TCREATE=$(curl -s -X POST "$BASE/api/events/$EVENT_ID/tickets" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
@@ -109,17 +122,17 @@ TCREATE=$(curl -s -X POST "$BASE/api/events/$EVENT_ID/tickets" \
 TCOUNT=$(echo "$TCREATE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total', len(d.get('data', []))))" 2>/dev/null)
 [ "$TCOUNT" = "20" ] && pass || fail "ticket batch expected 20, got $TCOUNT"
 
-echo "14. GET /api/events/{id}/tickets"
+echo "16. GET /api/events/{id}/tickets"
 TLIST=$(curl -s "$BASE/api/events/$EVENT_ID/tickets?limit=2")
 FIRST_TID=$(echo "$TLIST" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('data') or [{}])[0].get('id',''))" 2>/dev/null)
 [ -n "$FIRST_TID" ] && pass || fail "nao foi possivel obter ticket_id"
 
-echo "15. GET /api/tickets/{id}/availability"
+echo "17. GET /api/tickets/{id}/availability"
 AVAIL=$(curl -s "$BASE/api/tickets/$FIRST_TID/availability")
 AVAIL_STATUS=$(echo "$AVAIL" | json_get status)
 [ "$AVAIL_STATUS" = "available" ] && pass || fail "availability expected available, got '$AVAIL_STATUS'"
 
-echo "16. POST /api/reservations"
+echo "18. POST /api/reservations"
 RESERVE=$(curl -s -X POST "$BASE/api/reservations" \
   -H "Content-Type: application/json" \
   -d "{\"event_id\":\"$EVENT_ID\",\"quantity\":2}")
@@ -127,18 +140,19 @@ RES_COUNT=$(echo "$RESERVE" | python3 -c "import sys,json; d=json.load(sys.stdin
 RES_TID=$(echo "$RESERVE" | python3 -c "import sys,json; d=json.load(sys.stdin); t=d.get('tickets',[]); print(t[0]['id'] if t else '')" 2>/dev/null)
 [ "$RES_COUNT" = "2" ] && pass || fail "reservations expected 2, got $RES_COUNT"
 
-echo "17. GET /api/reservations/{ticket_id}"
+echo "19. GET /api/reservations/{ticket_id}"
 RES_GET=$(curl -s "$BASE/api/reservations/$RES_TID")
 RES_STATUS=$(echo "$RES_GET" | json_get status)
 [ "$RES_STATUS" = "reserved" ] && pass || fail "reservation status expected reserved, got '$RES_STATUS'"
 
 section "PAYMENT SERVICE VIA COMPOSER"
-echo "18. GET /api/payments"
-PAY_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/payments")
+echo "20. GET /api/payments"
+PAY_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/payments" \
+  -H "Authorization: Bearer $TOKEN")
 [ "$PAY_CODE" = "200" ] && pass || fail "payments list expected 200, got $PAY_CODE"
 
 section "SAGA CHECKOUT (AUTH+INVENTORY+PAYMENT)"
-echo "19. POST /api/checkout"
+echo "21. POST /api/checkout"
 CHECKOUT=$(curl -s -X POST "$BASE/api/checkout" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
@@ -153,10 +167,10 @@ else
   fail "checkout sem checkout_url/session_id"
 fi
 
-echo "20. checkout_url deve ser publico (localhost:8002)"
+echo "22. checkout_url deve ser publico (localhost:8002)"
 echo "$CHECKOUT_URL" | grep -q '^http://localhost:8002/checkout/' && pass || fail "checkout_url nao foi reescrito para localhost:8002"
 
-echo "21. Autorizar sessao no payment-service"
+echo "23. Autorizar sessao no payment-service"
 AUTH_RES=$(curl -s -X POST "http://localhost:8002/api/v1/checkout/sessions/$SESSION_ID/authorize" \
   -H "Content-Type: application/json" \
   -d "{\"password\":\"$PASSWORD\"}")
@@ -170,29 +184,43 @@ else
   fail "authorize expected succeeded (ou detalhe conhecido de wallet), got '$AUTH_STATUS' - response: $AUTH_RES"
 fi
 
-echo "22. Callback de sucesso do Composer"
+echo "24. Callback de sucesso do Composer"
 CB_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/checkout/success?session_id=$SESSION_ID")
 [[ "$CB_CODE" =~ ^(302|303|307|308)$ ]] && pass || fail "checkout/success expected redirect, got $CB_CODE"
 
-echo "23. POST /api/checkout sem token deve falhar"
+echo "25. POST /api/checkout sem token deve falhar"
 NO_AUTH=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/checkout" \
   -H "Content-Type: application/json" \
   -d '{"event_id":"fake","quantity":1,"success_url":"http://x","cancel_url":"http://y","amount_cents":100}')
 [ "$NO_AUTH" = "401" ] && pass || fail "checkout sem token expected 401, got $NO_AUTH"
 
 section "NEGATIVE E CLEANUP"
-echo "24. GET /api/events/{uuid-inexistente}"
+echo "26. GET /api/events/{uuid-inexistente}"
 ERR_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/events/00000000-0000-0000-0000-000000000000")
 [ "$ERR_CODE" = "404" ] && pass || fail "evento inexistente expected 404, got $ERR_CODE"
 
-echo "25. GET /api/auth/me sem token"
+echo "27. GET /api/auth/me sem token"
 NO_TOKEN=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/auth/me")
 [[ "$NO_TOKEN" =~ ^(401|403|422)$ ]] && pass || fail "auth/me sem token expected 401/403/422, got $NO_TOKEN"
 
-echo "26. DELETE /api/events/{id}"
+echo "28. DELETE /api/events/{id}"
 DEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE/api/events/$EVENT_ID" \
   -H "Authorization: Bearer $TOKEN")
 [[ "$DEL_CODE" =~ ^(200|204)$ ]] && pass || fail "delete event expected 200/204, got $DEL_CODE"
+
+echo "29. DELETE /api/auth/me"
+DEL_ME=$(curl -s -X DELETE "$BASE/api/auth/me" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{\"password\":\"$PASSWORD\"}")
+DEL_ME_MSG=$(echo "$DEL_ME" | json_get message)
+[ -n "$DEL_ME_MSG" ] && pass || fail "delete account nao devolveu message"
+
+echo "30. Login apos apagar conta deve falhar"
+LOGIN_DELETED_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")
+[[ "$LOGIN_DELETED_CODE" =~ ^(401|404)$ ]] && pass || fail "login de conta apagada expected 401/404, got $LOGIN_DELETED_CODE"
 
 echo ""
 echo "==============================================="

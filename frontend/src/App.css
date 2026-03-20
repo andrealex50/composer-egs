@@ -195,9 +195,13 @@ body {
   display: flex;
   align-items: center;
   gap: 0.65rem;
+  flex-wrap: wrap;
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 44px;
   border: 1px solid transparent;
   border-radius: 11px;
@@ -209,6 +213,7 @@ body {
   transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease, color 160ms ease;
   background: linear-gradient(115deg, var(--accent), var(--accent-strong));
   color: #052014;
+  text-decoration: none;
 }
 
 .btn:hover {

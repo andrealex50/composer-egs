@@ -5,7 +5,43 @@ import './App.css';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 const DEMO_EMAIL = 'testuser@example.com';
 const DEMO_PASSWORD = 'password123!';
-const SSO_STATE_KEY = 'flashsale_sso_state';
+const AUTH_UI_BASE_URL = import.meta.env.VITE_AUTH_UI_BASE_URL || 'http://localhost:5500';
+const AUTH_UI_LOGIN_PATH = import.meta.env.VITE_AUTH_UI_LOGIN_PATH || '/templates/login.html';
+const AUTH_UI_REGISTER_PATH = import.meta.env.VITE_AUTH_UI_REGISTER_PATH || '/templates/register.html';
+const AUTH_UI_FORGOT_PATH = import.meta.env.VITE_AUTH_UI_FORGOT_PATH || '/templates/forgot_password.html';
+const AUTH_STATE_STORAGE_KEY = 'flashsale_auth_state';
+const REFRESH_TOKEN_STORAGE_KEY = 'flashsale_refresh_token';
+const AUTH_EXCHANGE_PROMISE_KEY = '__flashsaleAuthExchangePromise';
+
+const buildAuthUiUrl = (path, query = {}) => {
+  const url = new URL(path, AUTH_UI_BASE_URL);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  });
+  return url.toString();
+};
+
+const buildApiUrl = (path) => new URL(path, API_BASE_URL || window.location.origin).toString();
+
+const createAuthState = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const getOrCreateAuthExchangePromise = (code, state) => {
+  const existing = window[AUTH_EXCHANGE_PROMISE_KEY];
+  if (existing?.code === code && existing?.state === state && existing?.promise) {
+    return existing.promise;
+  }
+
+  const promise = axios.post(`${API_BASE_URL}/api/auth/browser/exchange`, { code, state });
+  window[AUTH_EXCHANGE_PROMISE_KEY] = { code, state, promise };
+  return promise;
+};
 
 const extractErrorMessage = (error, fallback = 'Request failed') => {
   const detail = error?.response?.data?.detail;
@@ -38,9 +74,9 @@ function App() {
   const [eventsError, setEventsError] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
   const [toast, setToast] = useState(null);
-  const [ssoLoading, setSsoLoading] = useState(false);
   const [checkoutLoadingEventId, setCheckoutLoadingEventId] = useState('');
   const [quantityByEvent, setQuantityByEvent] = useState({});
+  const [authRedirectLoading, setAuthRedirectLoading] = useState(false);
 
   const [reservationEventId, setReservationEventId] = useState('');
   const [reservationQty, setReservationQty] = useState(1);
@@ -74,6 +110,63 @@ function App() {
   }, [token]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('auth_callback') !== '1') return;
+
+    const code = params.get('code');
+    const state = params.get('state');
+    const expectedState = localStorage.getItem(AUTH_STATE_STORAGE_KEY);
+    const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+
+    if (!code || !state || !expectedState || expectedState !== state) {
+      setAuthError('Secure login callback failed: invalid or missing state.');
+      localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
+      window.history.replaceState({}, document.title, cleanUrl);
+      return;
+    }
+
+    let cancelled = false;
+
+    const completeHandoff = async () => {
+      setAuthRedirectLoading(true);
+      setFlowInfo('Finalizing secure sign-in...');
+      setAuthError('');
+
+      try {
+        const res = await getOrCreateAuthExchangePromise(code, state);
+        if (cancelled) return;
+
+        if (res.data?.refresh_token) {
+          localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, res.data.refresh_token);
+        } else {
+          localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+        }
+
+        localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
+        setUser(res.data?.user || null);
+        setToken(res.data?.access_token || '');
+        setToast({ type: 'success', text: 'Signed in via Auth UI.' });
+      } catch (error) {
+        if (cancelled) return;
+        localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
+        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+        setAuthError('Secure login callback failed: ' + extractErrorMessage(error, 'Could not finish sign-in.'));
+      } finally {
+        if (cancelled) return;
+        setAuthRedirectLoading(false);
+        setFlowInfo('');
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    };
+
+    completeHandoff();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 3600);
     return () => clearTimeout(timer);
@@ -81,44 +174,7 @@ function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const returnedState = params.get('state');
     const status = params.get('status');
-    const storedState = localStorage.getItem(SSO_STATE_KEY);
-
-    if (code) {
-      const exchangeCode = async () => {
-        if (!returnedState || !storedState || returnedState !== storedState) {
-          setAuthError('SSO validation failed (invalid state).');
-          setToast({ type: 'error', text: 'SSO login failed: state mismatch.' });
-          localStorage.removeItem(SSO_STATE_KEY);
-          const cleanUrl = `${window.location.origin}${window.location.pathname}`;
-          window.history.replaceState({}, document.title, cleanUrl);
-          return;
-        }
-
-        try {
-          const res = await axios.post(`${API_BASE_URL}/api/auth/exchange-code`, { code });
-          if (!res.data?.access_token) {
-            throw new Error('No access_token in exchange response');
-          }
-          setToken(res.data.access_token);
-          setAuthError('');
-          setToast({ type: 'success', text: 'SSO login successful.' });
-          setActiveTab('overview');
-        } catch (error) {
-          setAuthError('SSO exchange failed: ' + extractErrorMessage(error, 'Could not exchange authorization code'));
-          setToast({ type: 'error', text: 'SSO login failed during token exchange.' });
-        } finally {
-          localStorage.removeItem(SSO_STATE_KEY);
-          const cleanUrl = `${window.location.origin}${window.location.pathname}`;
-          window.history.replaceState({}, document.title, cleanUrl);
-        }
-      };
-
-      exchangeCode();
-      return;
-    }
 
     if (!status) return;
 
@@ -134,33 +190,6 @@ function App() {
     const cleanUrl = `${window.location.origin}${window.location.pathname}`;
     window.history.replaceState({}, document.title, cleanUrl);
   }, [token]);
-
-  const startSsoFlow = async (mode) => {
-    setSsoLoading(true);
-    setAuthError('');
-    try {
-      const redirectUri = `${window.location.origin}${window.location.pathname}`;
-      const res = await axios.get(`${API_BASE_URL}/api/auth/sso/authorize-url`, {
-        params: {
-          mode,
-          redirect_uri: redirectUri,
-        },
-      });
-
-      const url = res.data?.authorization_url;
-      const state = res.data?.state;
-      if (!url || !state) {
-        throw new Error('Missing authorization_url/state from SSO bootstrap');
-      }
-
-      localStorage.setItem(SSO_STATE_KEY, state);
-      window.location.href = url;
-    } catch (error) {
-      setAuthError('SSO bootstrap failed: ' + extractErrorMessage(error, 'Could not start SSO flow'));
-      setToast({ type: 'error', text: 'SSO is unavailable. You can use API login.' });
-      setSsoLoading(false);
-    }
-  };
 
   const fetchEvents = () => {
     setLoadingEvents(true);
@@ -181,8 +210,13 @@ function App() {
     try {
       const res = await axios.post(`${API_BASE_URL}/api/auth/login`, {
         email: DEMO_EMAIL,
-        password: DEMO_PASSWORD
+        password: DEMO_PASSWORD,
       });
+      if (res.data?.refresh_token) {
+        localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, res.data.refresh_token);
+      } else {
+        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+      }
       setToken(res.data.access_token);
       setAuthError('');
       setToast({ type: 'success', text: 'Signed in. You can purchase tickets now.' });
@@ -198,7 +232,7 @@ function App() {
       await axios.post(`${API_BASE_URL}/api/auth/register`, {
         email: DEMO_EMAIL,
         password: DEMO_PASSWORD,
-        full_name: 'Test User'
+        full_name: 'Test User',
       });
       setToast({ type: 'success', text: 'Registration successful. You can now sign in.' });
       setAuthError('');
@@ -218,6 +252,7 @@ function App() {
       setUser(null);
       const statusCode = error?.response?.status;
       if (statusCode === 401 || statusCode === 403) {
+        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
         setToken(null);
         setAuthError('Session expired. Please login again.');
       }
@@ -239,6 +274,8 @@ function App() {
     } catch (_error) {
       // Ignore logout errors and clear local state anyway.
     } finally {
+      localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+      localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
       setToken(null);
       setUser(null);
       setPayments([]);
@@ -342,19 +379,19 @@ function App() {
     setCheckoutLoadingEventId(eventId);
     setFlowInfo('Redirecting to hosted checkout...');
     setWalletActionUrl('');
-    
+
     try {
       const payload = {
         event_id: eventId,
         quantity,
         success_url: window.location.href.split('?')[0] + '?status=success',
         cancel_url: window.location.href.split('?')[0] + '?status=cancel',
-        amount_cents: quantity * 1500
+        amount_cents: quantity * 1500,
       };
-      
+
       const config = { headers: { Authorization: `Bearer ${token}` } };
       const res = await axios.post(`${API_BASE_URL}/api/checkout`, payload, config);
-      
+
       if (res.data && res.data.checkout_url) {
         window.location.href = res.data.checkout_url;
       } else {
@@ -378,6 +415,20 @@ function App() {
   const setEventQuantity = (eventId, value) => {
     const parsed = Math.max(1, Math.min(10, Number(value) || 1));
     setQuantityByEvent((prev) => ({ ...prev, [eventId]: parsed }));
+  };
+
+  const startAuthUiFlow = (path) => {
+    const state = createAuthState();
+    localStorage.setItem(AUTH_STATE_STORAGE_KEY, state);
+    setAuthError('');
+    setFlowInfo('Redirecting to the Auth UI...');
+
+    const authUrl = buildAuthUiUrl(path, {
+      handoff_url: buildApiUrl('/api/auth/browser/handoff'),
+      return_to: `${window.location.origin}${window.location.pathname}`,
+      state,
+    });
+    window.location.href = authUrl;
   };
 
   const usePaymentInRefund = (paymentId) => {
@@ -454,7 +505,7 @@ function App() {
             <>
               <p>Welcome. Use the demo account to run the full buying flow.</p>
               <p className="hint">Demo login: {DEMO_EMAIL} / {DEMO_PASSWORD}</p>
-              <p className="hint">You can also use SSO Login/Register via the Auth UI.</p>
+              <p className="hint">The dedicated auth frontend remains separate. Sign-in there now returns securely to the Composer with a one-time handoff code.</p>
             </>
           )}
         </div>
@@ -464,14 +515,17 @@ function App() {
             <button className="btn btn-outline" onClick={handleLogout}>Logout</button>
           ) : (
             <>
-              <button className="btn btn-outline" onClick={() => startSsoFlow('register')} disabled={ssoLoading}>
-                {ssoLoading ? 'Loading...' : 'SSO Register'}
+              <button className="btn btn-outline" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
+                Auth Register UI
               </button>
-              <button className="btn btn-outline" onClick={() => startSsoFlow('login')} disabled={ssoLoading}>
-                {ssoLoading ? 'Loading...' : 'SSO Login'}
+              <button className="btn btn-outline" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
+                Auth Login UI
               </button>
-              <button className="btn btn-outline" onClick={registerDummy}>Register</button>
-              <button className="btn" onClick={loginDummy}>Login</button>
+              <a className="btn btn-outline" href={buildAuthUiUrl(AUTH_UI_FORGOT_PATH)}>
+                Forgot Password UI
+              </a>
+              <button className="btn btn-outline" onClick={registerDummy} disabled={authRedirectLoading}>Register</button>
+              <button className="btn" onClick={loginDummy} disabled={authRedirectLoading}>Login</button>
             </>
           )}
         </div>

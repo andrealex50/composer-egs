@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 
 import httpx
@@ -19,13 +20,43 @@ PAYMENT_PUBLIC_URL = os.getenv("PAYMENT_PUBLIC_URL", "http://localhost:8002")
 INVENTORY_API_KEY = os.getenv("INVENTORY_API_KEY", "your-secret-api-key")
 PAYMENT_API_KEY = os.getenv("PAYMENT_API_KEY", "your-secret-api-key")
 INTERNAL_SERVICE_KEY = os.getenv("INTERNAL_SERVICE_KEY", "internal-dev-key-2024")
-AUTH_SSO_CLIENT_ID = os.getenv("AUTH_SSO_CLIENT_ID", "flash-sale")
-AUTH_BROWSER_URL = os.getenv("AUTH_BROWSER_URL", "http://localhost:8001")
+COMPOSER_CORS_ORIGINS = os.getenv(
+    "COMPOSER_CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500",
+)
+COMPOSER_BROWSER_RETURN_TO_ORIGINS = os.getenv(
+    "COMPOSER_BROWSER_RETURN_TO_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+BROWSER_HANDOFF_TTL_SECONDS = max(30, int(os.getenv("BROWSER_HANDOFF_TTL_SECONDS", "120")))
 EVENT_MUTATIONS_REQUIRE_ADMIN = os.getenv("EVENT_MUTATIONS_REQUIRE_ADMIN", "false").lower() in {"1", "true", "yes"}
 EVENT_ADMIN_ROLES = {
     role.strip().lower()
     for role in os.getenv("EVENT_ADMIN_ROLES", "admin").split(",")
     if role.strip()
+}
+TRACE_HEADER_NAMES = ("X-Request-ID", "X-Correlation-ID")
+_BROWSER_HANDOFF_CODES: dict[str, dict] = {}
+
+
+def _parse_origins(origins: str) -> list[str]:
+    return [item.strip().rstrip("/") for item in origins.split(",") if item.strip()]
+
+
+def _normalize_origin(url: str) -> str | None:
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+ALLOWED_BROWSER_RETURN_TO_ORIGINS = {
+    origin
+    for origin in (
+        _normalize_origin(item)
+        for item in _parse_origins(COMPOSER_BROWSER_RETURN_TO_ORIGINS)
+    )
+    if origin
 }
 
 app = FastAPI(
@@ -42,7 +73,7 @@ app = FastAPI(
 # CORS — necessário para o frontend React
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],       # restringir em produção
+    allow_origins=_parse_origins(COMPOSER_CORS_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,13 +93,14 @@ async def proxy(
     params: dict | None = None,
     timeout: float = 10.0,
     service_label: str = "serviço",
+    request: Request | None = None,
 ) -> dict | bytes:
     """Faz proxy de um pedido para um serviço interno e devolve a resposta."""
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.request(
                 method, url,
-                headers=headers,
+                headers=_with_trace_headers(headers, request),
                 json=json,
                 content=body,
                 params=params,
@@ -110,6 +142,16 @@ def _auth_headers(authorization: str | None) -> dict:
     return h
 
 
+def _with_trace_headers(headers: dict | None = None, request: Request | None = None) -> dict:
+    merged = dict(headers or {})
+    if request is not None:
+        for header_name in TRACE_HEADER_NAMES:
+            header_value = request.headers.get(header_name)
+            if header_value:
+                merged[header_name] = header_value
+    return merged
+
+
 def _extract_bearer_token(authorization: str | None) -> str | None:
     """Extrai o token Bearer do header Authorization."""
     if not authorization:
@@ -120,12 +162,43 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
     return token or None
 
 
-async def _verify_user_token(token: str) -> dict:
+def _cleanup_browser_handoff_codes() -> None:
+    now = time.time()
+    expired_codes = [
+        code
+        for code, payload in _BROWSER_HANDOFF_CODES.items()
+        if payload.get("expires_at", 0) <= now
+    ]
+    for code in expired_codes:
+        _BROWSER_HANDOFF_CODES.pop(code, None)
+
+
+def _validate_browser_return_to(return_to: str) -> str:
+    parsed = urllib.parse.urlparse(return_to)
+    origin = _normalize_origin(return_to)
+    if not origin or origin not in ALLOWED_BROWSER_RETURN_TO_ORIGINS:
+        raise HTTPException(status_code=400, detail="return_to não permitido")
+    if parsed.fragment:
+        raise HTTPException(status_code=400, detail="return_to inválido")
+    cleaned = parsed._replace(params="", fragment="")
+    return urllib.parse.urlunparse(cleaned)
+
+
+def _append_query_params(url: str, params: dict[str, str]) -> str:
+    parsed = urllib.parse.urlparse(url)
+    merged_query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    merged_query.update(params)
+    return urllib.parse.urlunparse(
+        parsed._replace(query=urllib.parse.urlencode(merged_query))
+    )
+
+
+async def _verify_user_token(token: str, request: Request | None = None) -> dict:
     """Valida token no Auth Service e devolve claims essenciais."""
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{AUTH_SERVICE_URL}/api/v1/auth/verify",
-            headers={"X-Service-Auth": INTERNAL_SERVICE_KEY},
+            headers=_with_trace_headers({"X-Service-Auth": INTERNAL_SERVICE_KEY}, request),
             json={"token": token},
         )
     if resp.status_code != 200:
@@ -136,14 +209,14 @@ async def _verify_user_token(token: str) -> dict:
     return payload
 
 
-async def _ensure_event_admin_if_required(authorization: str | None) -> dict | None:
+async def _ensure_event_admin_if_required(authorization: str | None, request: Request | None = None) -> dict | None:
     """Valida role admin para mutações de eventos quando a política está ativa."""
     token = _extract_bearer_token(authorization)
     if not EVENT_MUTATIONS_REQUIRE_ADMIN:
         if not token:
             return None
         try:
-            return await _verify_user_token(token)
+            return await _verify_user_token(token, request)
         except HTTPException:
             # Em modo compatível, não bloqueia mutação se token inválido/ausente.
             return None
@@ -151,7 +224,7 @@ async def _ensure_event_admin_if_required(authorization: str | None) -> dict | N
     if not token:
         raise HTTPException(status_code=401, detail="Token em falta para mutações de eventos")
 
-    claims = await _verify_user_token(token)
+    claims = await _verify_user_token(token, request)
     role = str(claims.get("role") or "").lower()
     if role not in EVENT_ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Apenas admins podem alterar eventos")
@@ -163,6 +236,7 @@ def _inv_headers(
     *,
     auth_claims: dict | None = None,
     idempotency_key: str | None = None,
+    request: Request | None = None,
 ) -> dict:
     """Headers para Inventory: API key + contexto opcional do utilizador."""
     h: dict = {"X-API-Key": INVENTORY_API_KEY}
@@ -177,23 +251,23 @@ def _inv_headers(
             h["X-User-Role"] = str(auth_claims["role"])
         if auth_claims.get("email"):
             h["X-User-Email"] = str(auth_claims["email"])
-    return h
+    return _with_trace_headers(h, request)
 
 
-def _pay_headers(idempotency_key: str | None = None) -> dict:
+def _pay_headers(idempotency_key: str | None = None, request: Request | None = None) -> dict:
     """Headers de autenticação para o Payment Service."""
     h: dict = {"X-API-Key": PAYMENT_API_KEY}
     if idempotency_key:
         h["Idempotency-Key"] = idempotency_key
-    return h
+    return _with_trace_headers(h, request)
 
 
-async def _get_authenticated_claims(authorization: str | None) -> dict:
+async def _get_authenticated_claims(authorization: str | None, request: Request | None = None) -> dict:
     """Garante autenticação e devolve claims normalizados do utilizador."""
     token = _extract_bearer_token(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="Token em falta")
-    claims = await _verify_user_token(token)
+    claims = await _verify_user_token(token, request)
     email = str(claims.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=401, detail="Token inválido")
@@ -201,14 +275,15 @@ async def _get_authenticated_claims(authorization: str | None) -> dict:
     return claims
 
 
-async def _find_payment_customer_by_email(email: str) -> dict | None:
+async def _find_payment_customer_by_email(email: str, request: Request | None = None) -> dict | None:
     """Resolve customer do Payment Service por email (match case-insensitive)."""
     payload = await proxy(
         "GET",
         f"{PAYMENT_SERVICE_URL}/api/v1/customers",
-        headers=_pay_headers(),
+        headers=_pay_headers(request=request),
         params={"email": email, "limit": 20, "offset": 0},
         service_label="Payment Service",
+        request=request,
     )
     items = payload.get("items", []) if isinstance(payload, dict) else []
     for item in items:
@@ -256,6 +331,18 @@ class RefundRequest(BaseModel):
     reason: Optional[str] = "requested_by_customer"
 
 
+class BrowserHandoffRequest(BaseModel):
+    access_token: str
+    refresh_token: Optional[str] = None
+    return_to: str
+    state: str
+
+
+class BrowserHandoffExchangeRequest(BaseModel):
+    code: str
+    state: str
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. AUTH  —  /api/auth/*
 #    Backend: AUTH_SERVICE /api/v1/auth/*
@@ -265,82 +352,140 @@ class RefundRequest(BaseModel):
 async def auth_register(request: Request):
     body = await request.json()
     return await proxy("POST", f"{AUTH_SERVICE_URL}/api/v1/auth/register",
-                        json=body, service_label="Auth Service")
+                        json=body, service_label="Auth Service", request=request)
 
 
 @app.post("/api/auth/login", summary="Login (JWT)", tags=["Auth"])
 async def auth_login(request: Request):
     body = await request.json()
     return await proxy("POST", f"{AUTH_SERVICE_URL}/api/v1/auth/login",
-                        json=body, service_label="Auth Service")
+                        json=body, service_label="Auth Service", request=request)
 
 
 @app.post("/api/auth/refresh", summary="Renovar access token", tags=["Auth"])
 async def auth_refresh(request: Request):
     body = await request.json()
     return await proxy("POST", f"{AUTH_SERVICE_URL}/api/v1/auth/refresh",
-                        json=body, service_label="Auth Service")
+                        json=body, service_label="Auth Service", request=request)
 
 
 @app.get("/api/auth/me", summary="Perfil do utilizador autenticado", tags=["Auth"])
-async def auth_me(authorization: Optional[str] = Header(None)):
+async def auth_me(request: Request, authorization: Optional[str] = Header(None)):
     return await proxy("GET", f"{AUTH_SERVICE_URL}/api/v1/auth/me",
                         headers=_auth_headers(authorization),
-                        service_label="Auth Service")
+                        service_label="Auth Service",
+                        request=request)
 
 
 @app.post("/api/auth/logout", summary="Logout", tags=["Auth"])
-async def auth_logout(authorization: Optional[str] = Header(None)):
+async def auth_logout(request: Request, authorization: Optional[str] = Header(None)):
     return await proxy("POST", f"{AUTH_SERVICE_URL}/api/v1/auth/logout",
                         headers=_auth_headers(authorization),
-                        service_label="Auth Service")
+                        service_label="Auth Service",
+                        request=request)
 
 
-@app.get("/api/auth/sso/authorize-url", summary="Obter URL de SSO login/register", tags=["Auth"])
-async def auth_sso_authorize_url(
-    request: Request,
-    mode: str = "login",
-    redirect_uri: Optional[str] = None,
-    state: Optional[str] = None,
-):
-    if mode not in {"login", "register"}:
-        raise HTTPException(status_code=422, detail="mode deve ser 'login' ou 'register'")
+@app.post("/api/auth/forgot-password", summary="Solicitar reset de password", tags=["Auth"])
+async def auth_forgot_password(request: Request):
+    body = await request.json()
+    return await proxy(
+        "POST",
+        f"{AUTH_SERVICE_URL}/api/v1/auth/forgot-password",
+        json=body,
+        service_label="Auth Service",
+        request=request,
+    )
 
-    base_frontend_url = str(request.base_url).rstrip("/")
-    target_redirect = redirect_uri or f"{base_frontend_url}/"
-    nonce = state or uuid.uuid4().hex
 
-    route = "login" if mode == "login" else "register"
-    params = urllib.parse.urlencode({
-        "client_id": AUTH_SSO_CLIENT_ID,
-        "redirect_uri": target_redirect,
-        "state": nonce,
-    })
+@app.post("/api/auth/reset-password", summary="Aplicar nova password com token", tags=["Auth"])
+async def auth_reset_password(request: Request):
+    body = await request.json()
+    return await proxy(
+        "POST",
+        f"{AUTH_SERVICE_URL}/api/v1/auth/reset-password",
+        json=body,
+        service_label="Auth Service",
+        request=request,
+    )
 
+
+@app.delete("/api/auth/me", summary="Eliminar conta autenticada", tags=["Auth"])
+async def auth_delete_me(request: Request, authorization: Optional[str] = Header(None)):
+    body = await request.json()
+    return await proxy(
+        "DELETE",
+        f"{AUTH_SERVICE_URL}/api/v1/auth/me",
+        headers=_auth_headers(authorization),
+        json=body,
+        service_label="Auth Service",
+        request=request,
+    )
+
+
+@app.post("/api/auth/browser/handoff", summary="Criar handoff one-time para login browser", tags=["Auth"])
+async def auth_browser_handoff(payload: BrowserHandoffRequest, request: Request):
+    access_token = payload.access_token.strip()
+    state = payload.state.strip()
+    if not access_token:
+        raise HTTPException(status_code=422, detail="access_token é obrigatório")
+    if not state or len(state) > 256:
+        raise HTTPException(status_code=422, detail="state inválido")
+
+    claims = await _verify_user_token(access_token, request)
+    return_to = _validate_browser_return_to(payload.return_to.strip())
+
+    _cleanup_browser_handoff_codes()
+    code = uuid.uuid4().hex
+    _BROWSER_HANDOFF_CODES[code] = {
+        "access_token": access_token,
+        "refresh_token": payload.refresh_token.strip() if payload.refresh_token else None,
+        "state": state,
+        "return_to": return_to,
+        "expires_at": time.time() + BROWSER_HANDOFF_TTL_SECONDS,
+        "user": {
+            "user_id": claims.get("user_id"),
+            "email": claims.get("email"),
+            "role": claims.get("role"),
+        },
+    }
+    redirect_to = _append_query_params(
+        return_to,
+        {
+            "auth_callback": "1",
+            "code": code,
+            "state": state,
+        },
+    )
     return {
-        "authorization_url": f"{AUTH_BROWSER_URL}/ui/{route}?{params}",
-        "state": nonce,
-        "client_id": AUTH_SSO_CLIENT_ID,
-        "mode": mode,
+        "redirect_to": redirect_to,
+        "expires_in_seconds": BROWSER_HANDOFF_TTL_SECONDS,
     }
 
 
-@app.post("/api/auth/exchange-code", summary="Trocar auth code por tokens", tags=["Auth"])
-async def auth_exchange_code(request: Request):
-    body = await request.json()
-    code = body.get("code")
-    client_id = body.get("client_id") or AUTH_SSO_CLIENT_ID
+@app.post("/api/auth/browser/exchange", summary="Trocar código one-time por sessão local", tags=["Auth"])
+async def auth_browser_exchange(payload: BrowserHandoffExchangeRequest, request: Request):
+    code = payload.code.strip()
+    state = payload.state.strip()
+    if not code or not state:
+        raise HTTPException(status_code=422, detail="code e state são obrigatórios")
 
-    if not code:
-        raise HTTPException(status_code=422, detail="code é obrigatório")
+    _cleanup_browser_handoff_codes()
+    handoff = _BROWSER_HANDOFF_CODES.pop(code, None)
+    if not handoff:
+        raise HTTPException(status_code=401, detail="Código de login inválido ou expirado")
+    if handoff.get("state") != state:
+        raise HTTPException(status_code=401, detail="State inválido")
 
-    payload = {"code": code, "client_id": client_id}
-    return await proxy(
-        "POST",
-        f"{AUTH_SERVICE_URL}/api/v1/auth/exchange-code",
-        json=payload,
-        service_label="Auth Service",
-    )
+    claims = await _verify_user_token(handoff["access_token"], request)
+    return {
+        "access_token": handoff["access_token"],
+        "refresh_token": handoff.get("refresh_token"),
+        "user": {
+            "user_id": claims.get("user_id"),
+            "email": claims.get("email"),
+            "role": claims.get("role"),
+        },
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -352,31 +497,34 @@ async def auth_exchange_code(request: Request):
 async def list_events(request: Request):
     # Passa todos os query params para o Inventory (skip, limit, status, search, etc.)
     return await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events",
-                        headers=_inv_headers(),
+                        headers=_inv_headers(request=request),
                         params=dict(request.query_params),
-                        service_label="Inventory Service")
+                        service_label="Inventory Service",
+                        request=request)
 
 
 @app.post("/api/events", summary="Criar evento", tags=["Events"])
 async def create_event(request: Request, authorization: Optional[str] = Header(None)):
     body = await request.json()
-    claims = await _ensure_event_admin_if_required(authorization)
+    claims = await _ensure_event_admin_if_required(authorization, request)
     return await proxy("POST", f"{INVENTORY_SERVICE_URL}/api/v1/events",
-                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4())),
-                        json=body, service_label="Inventory Service")
+                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+                        json=body, service_label="Inventory Service", request=request)
 
 
 @app.get("/api/events/{event_id}", summary="Detalhes do evento", tags=["Events"])
-async def get_event(event_id: str):
+async def get_event(event_id: str, request: Request):
     # Composer bonus: junta as categorias de bilhetes ao evento
     event_data = await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}",
-                              headers=_inv_headers(),
-                              service_label="Inventory Service")
+                              headers=_inv_headers(request=request),
+                              service_label="Inventory Service",
+                              request=request)
 
     try:
         tickets = await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}/tickets",
-                               headers=_inv_headers(),
-                               service_label="Inventory Service")
+                               headers=_inv_headers(request=request),
+                               service_label="Inventory Service",
+                               request=request)
         if isinstance(tickets, dict):
             event_data["ticket_categories"] = tickets.get("data", [])
     except HTTPException:
@@ -388,18 +536,19 @@ async def get_event(event_id: str):
 @app.put("/api/events/{event_id}", summary="Atualizar evento", tags=["Events"])
 async def update_event(event_id: str, request: Request, authorization: Optional[str] = Header(None)):
     body = await request.json()
-    claims = await _ensure_event_admin_if_required(authorization)
+    claims = await _ensure_event_admin_if_required(authorization, request)
     return await proxy("PUT", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}",
-                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4())),
-                        json=body, service_label="Inventory Service")
+                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+                        json=body, service_label="Inventory Service", request=request)
 
 
 @app.delete("/api/events/{event_id}", summary="Apagar evento", tags=["Events"])
-async def delete_event(event_id: str, authorization: Optional[str] = Header(None)):
-    claims = await _ensure_event_admin_if_required(authorization)
+async def delete_event(event_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    claims = await _ensure_event_admin_if_required(authorization, request)
     return await proxy("DELETE", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}",
-                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4())),
-                        service_label="Inventory Service")
+                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+                        service_label="Inventory Service",
+                        request=request)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -411,26 +560,28 @@ async def delete_event(event_id: str, authorization: Optional[str] = Header(None
 @app.post("/api/events/{event_id}/tickets", summary="Criar bilhetes (batch)", tags=["Tickets"])
 async def create_tickets(event_id: str, request: Request, authorization: Optional[str] = Header(None)):
     body = await request.json()
-    claims = await _ensure_event_admin_if_required(authorization)
+    claims = await _ensure_event_admin_if_required(authorization, request)
     return await proxy("POST", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}/tickets",
-                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4())),
-                        json=body, service_label="Inventory Service")
+                        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+                        json=body, service_label="Inventory Service", request=request)
 
 
 @app.get("/api/events/{event_id}/tickets", summary="Listar bilhetes de um evento", tags=["Tickets"])
 async def list_event_tickets(event_id: str, request: Request):
     return await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}/tickets",
-                        headers=_inv_headers(),
+                        headers=_inv_headers(request=request),
                         params=dict(request.query_params),
-                        service_label="Inventory Service")
+                        service_label="Inventory Service",
+                        request=request)
 
 
 @app.get("/api/tickets/{ticket_id}/availability", summary="Disponibilidade do bilhete", tags=["Tickets"])
-async def ticket_availability(ticket_id: str):
+async def ticket_availability(ticket_id: str, request: Request):
     """Proxy para GET /api/v1/tickets/{ticket_id} — devolve o estado atual do bilhete."""
     return await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket_id}",
-                        headers=_inv_headers(),
-                        service_label="Inventory Service")
+                        headers=_inv_headers(request=request),
+                        service_label="Inventory Service",
+                        request=request)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -450,7 +601,7 @@ async def create_reservation(request: Request, authorization: Optional[str] = He
     if not event_id:
         raise HTTPException(status_code=422, detail="event_id é obrigatório")
 
-    inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()))
+    inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Procurar bilhetes disponíveis
@@ -491,11 +642,12 @@ async def create_reservation(request: Request, authorization: Optional[str] = He
 
 
 @app.get("/api/reservations/{ticket_id}", summary="Ver estado da reserva", tags=["Reservations"])
-async def get_reservation(ticket_id: str):
+async def get_reservation(ticket_id: str, request: Request):
     """Proxy para GET /api/v1/tickets/{ticket_id} — devolve o bilhete (inclui status de reserva)."""
     return await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket_id}",
-                        headers=_inv_headers(),
-                        service_label="Inventory Service")
+                        headers=_inv_headers(request=request),
+                        service_label="Inventory Service",
+                        request=request)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -506,8 +658,8 @@ async def get_reservation(ticket_id: str):
 
 @app.get("/api/payments", summary="Listar pagamentos", tags=["Payments"])
 async def list_payments(request: Request, authorization: Optional[str] = Header(None)):
-    claims = await _get_authenticated_claims(authorization)
-    customer = await _find_payment_customer_by_email(claims["_normalized_email"])
+    claims = await _get_authenticated_claims(authorization, request)
+    customer = await _find_payment_customer_by_email(claims["_normalized_email"], request)
     params = dict(request.query_params)
     limit = int(params.get("limit", 20)) if str(params.get("limit", "")).isdigit() else 20
     offset = int(params.get("offset", 0)) if str(params.get("offset", "")).isdigit() else 0
@@ -519,9 +671,10 @@ async def list_payments(request: Request, authorization: Optional[str] = Header(
     return await proxy(
         "GET",
         f"{PAYMENT_SERVICE_URL}/api/v1/payments",
-        headers=_pay_headers(),
+        headers=_pay_headers(request=request),
         params=params,
         service_label="Payment Service",
+        request=request,
     )
 
 
@@ -529,22 +682,23 @@ async def list_payments(request: Request, authorization: Optional[str] = Header(
 async def create_payment(request: Request):
     body = await request.json()
     return await proxy("POST", f"{PAYMENT_SERVICE_URL}/api/v1/payments",
-                        headers=_pay_headers(str(uuid.uuid4())),
-                        json=body, service_label="Payment Service")
+                        headers=_pay_headers(str(uuid.uuid4()), request=request),
+                        json=body, service_label="Payment Service", request=request)
 
 
 @app.get("/api/payments/{payment_id}", summary="Detalhes do pagamento", tags=["Payments"])
-async def get_payment(payment_id: str, authorization: Optional[str] = Header(None)):
-    claims = await _get_authenticated_claims(authorization)
-    customer = await _find_payment_customer_by_email(claims["_normalized_email"])
+async def get_payment(payment_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    claims = await _get_authenticated_claims(authorization, request)
+    customer = await _find_payment_customer_by_email(claims["_normalized_email"], request)
     if not customer or not customer.get("id"):
         raise HTTPException(status_code=404, detail="Pagamento não encontrado")
 
     data = await proxy(
         "GET",
         f"{PAYMENT_SERVICE_URL}/api/v1/payments/{payment_id}",
-        headers=_pay_headers(),
+        headers=_pay_headers(request=request),
         service_label="Payment Service",
+        request=request,
     )
     if str(data.get("customer_id") or "") != str(customer["id"]):
         raise HTTPException(status_code=404, detail="Pagamento não encontrado")
@@ -552,33 +706,36 @@ async def get_payment(payment_id: str, authorization: Optional[str] = Header(Non
 
 
 @app.post("/api/payments/{payment_id}/confirm", summary="Confirmar pagamento", tags=["Payments"])
-async def confirm_payment(payment_id: str):
+async def confirm_payment(payment_id: str, request: Request):
     # Payment Service usa PUT /payments/{id}/confirm
     return await proxy("PUT", f"{PAYMENT_SERVICE_URL}/api/v1/payments/{payment_id}/confirm",
-                        headers=_pay_headers(),
-                        service_label="Payment Service")
+                        headers=_pay_headers(request=request),
+                        service_label="Payment Service",
+                        request=request)
 
 
 @app.post("/api/payments/{payment_id}/cancel", summary="Cancelar pagamento", tags=["Payments"])
-async def cancel_payment(payment_id: str):
+async def cancel_payment(payment_id: str, request: Request):
     # Payment Service usa DELETE /payments/{id} para cancelar/refund
     return await proxy("DELETE", f"{PAYMENT_SERVICE_URL}/api/v1/payments/{payment_id}",
-                        headers=_pay_headers(),
-                        service_label="Payment Service")
+                        headers=_pay_headers(request=request),
+                        service_label="Payment Service",
+                        request=request)
 
 
 @app.get("/api/payments/{payment_id}/receipt", summary="Descarregar recibo (PDF)", tags=["Payments"])
-async def download_receipt(payment_id: str, authorization: Optional[str] = Header(None)):
-    claims = await _get_authenticated_claims(authorization)
-    customer = await _find_payment_customer_by_email(claims["_normalized_email"])
+async def download_receipt(payment_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    claims = await _get_authenticated_claims(authorization, request)
+    customer = await _find_payment_customer_by_email(claims["_normalized_email"], request)
     if not customer or not customer.get("id"):
         raise HTTPException(status_code=404, detail="Pagamento não encontrado")
 
     payment = await proxy(
         "GET",
         f"{PAYMENT_SERVICE_URL}/api/v1/payments/{payment_id}",
-        headers=_pay_headers(),
+        headers=_pay_headers(request=request),
         service_label="Payment Service",
+        request=request,
     )
     if str(payment.get("customer_id") or "") != str(customer["id"]):
         raise HTTPException(status_code=404, detail="Pagamento não encontrado")
@@ -586,8 +743,9 @@ async def download_receipt(payment_id: str, authorization: Optional[str] = Heade
     data = await proxy(
         "GET",
         f"{PAYMENT_SERVICE_URL}/api/v1/payments/{payment_id}/receipt",
-        headers=_pay_headers(),
+        headers=_pay_headers(request=request),
         service_label="Payment Service",
+        request=request,
     )
     if isinstance(data, bytes):
         return Response(
@@ -615,7 +773,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         # 1. Obter dados do utilizador do Auth Service
         me_resp = await client.get(
             f"{AUTH_SERVICE_URL}/api/v1/auth/me",
-            headers={"Authorization": f"Bearer {token}"}
+            headers=_with_trace_headers({"Authorization": f"Bearer {token}"}, request),
         )
         if me_resp.status_code != 200:
             raise HTTPException(status_code=401, detail="Não autorizado")
@@ -624,7 +782,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         if not user_email:
             raise HTTPException(status_code=401, detail="Sessão inválida: email em falta")
 
-        customer = await _find_payment_customer_by_email(user_email)
+        customer = await _find_payment_customer_by_email(user_email, request)
         if not customer or not customer.get("id"):
             raise HTTPException(
                 status_code=409,
@@ -636,7 +794,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
             )
 
         # 2. Reservar bilhetes no Inventory Service
-        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()))
+        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
         
         res = await client.get(
             f"{INVENTORY_SERVICE_URL}/api/v1/events/{order.event_id}/tickets",
@@ -702,7 +860,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         pay_resp = await client.post(
             f"{PAYMENT_SERVICE_URL}/api/v1/checkout/sessions",
             json=pay_payload,
-            headers=_pay_headers(str(uuid.uuid4())),
+            headers=_pay_headers(str(uuid.uuid4()), request=request),
         )
         
         if pay_resp.status_code not in (200, 201):
@@ -807,7 +965,7 @@ async def checkout_cancel(tickets: str = "", frontend_url: str = "/"):
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.post("/api/refund", summary="Reembolso completo (devolve + cancela)", tags=["Orchestration"])
-async def process_refund(req: RefundRequest, authorization: Optional[str] = Header(None)):
+async def process_refund(request: Request, req: RefundRequest, authorization: Optional[str] = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Token em falta")
     token = _extract_bearer_token(authorization)
@@ -816,7 +974,7 @@ async def process_refund(req: RefundRequest, authorization: Optional[str] = Head
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         # 1. Verificar token
-        claims = await _verify_user_token(token)
+        claims = await _verify_user_token(token, request)
         if not claims.get("valid"):
             raise HTTPException(status_code=401, detail="Não autorizado")
 
@@ -830,14 +988,14 @@ async def process_refund(req: RefundRequest, authorization: Optional[str] = Head
         ref_resp = await client.post(
             f"{PAYMENT_SERVICE_URL}/api/v1/refunds",
             json=refund_payload,
-            headers=_pay_headers(str(uuid.uuid4())),
+            headers=_pay_headers(str(uuid.uuid4()), request=request),
         )
         if ref_resp.status_code not in (200, 201):
             raise HTTPException(status_code=400, detail="Erro ao processar reembolso.")
 
         # 3. Cancelar bilhetes no Inventory
         #    Rota real: POST /api/v1/tickets/{ticket_id}/cancel
-        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()))
+        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
         for tid in req.ticket_ids:
             await _cancel_reserved_ticket(
                 client,
