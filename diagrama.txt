@@ -1,53 +1,25 @@
-```mermaid
-graph TB
-    subgraph Frontend
-        USER["👤 Fãs / Compradores<br/>Frontend React"]
-    end
-
-    USER -->|Pedidos| COMPOSER
-
-    subgraph GATEWAY["Composer / API Gateway — FastAPI :8080"]
-        COMPOSER["<b>Composer / API Gateway</b><br/>FastAPI"]
-        
-        AUTH_ROUTES["<b>Auth</b><br/>POST /api/auth/register<br/>POST /api/auth/login<br/>POST /api/auth/refresh<br/>GET /api/auth/me<br/>POST /api/auth/logout<br/>POST /api/auth/forgot-password<br/>POST /api/auth/reset-password<br/>DELETE /api/auth/me"]
-        EVENT_ROUTES["<b>Events</b><br/>GET|POST /api/events<br/>GET|PUT|DEL /api/events/{id}<br/>POST /api/events/{id}/tickets<br/>GET /api/events/{id}/tickets<br/>GET /api/tickets/{id}/availability"]
-        RES_ROUTES["<b>Reservations</b><br/>POST /api/reservations<br/>GET /api/reservations/{id}"]
-        PAY_ROUTES["<b>Payments</b><br/>GET|POST /api/payments<br/>GET /api/payments/{id}<br/>POST /api/payments/{id}/confirm<br/>POST /api/payments/{id}/cancel<br/>GET /api/payments/{id}/receipt"]
-        ORCH_ROUTES["<b>Orquestrações Saga</b><br/>POST /api/checkout<br/>GET /api/checkout/success<br/>GET /api/checkout/cancel<br/>POST /api/refund<br/>GET /health"]
-    end
-
-    subgraph SERVICES["Serviços de Negócio Independentes"]
-        subgraph AUTH_BOX["Auth Service"]
-            AUTH["Auth API<br/>Gerenciamento de identidades, JWT e password reset"]
-        end
-
-        subgraph INV_BOX["Inventory Service"]
-            INV["Inventory API<br/>Gestão de eventos, bilhetes e reservas"]
-        end
-
-        subgraph PAY_BOX["Payment Service"]
-            PAY["Payment API<br/>Processamento de pagamentos pela Stripe"]
-        end
-    end
-
-    COMPOSER --> AUTH_ROUTES
-    COMPOSER --> EVENT_ROUTES
-    COMPOSER --> RES_ROUTES
-    COMPOSER --> PAY_ROUTES
-    COMPOSER --> ORCH_ROUTES
-
-    AUTH_ROUTES -->|"proxy"| AUTH
-    EVENT_ROUTES -->|"proxy"| INV
-    RES_ROUTES -->|"proxy"| INV
-    PAY_ROUTES -->|"proxy"| PAY
-    ORCH_ROUTES -->|"Auth + Inventory + Payment"| AUTH
-    ORCH_ROUTES -->|"saga"| INV
-    ORCH_ROUTES -->|"saga"| PAY
-
-    style GATEWAY fill:#2d2d4e,stroke:#6366f1,color:#fff
-    style AUTH_BOX fill:#1e1e3a,stroke:#8b5cf6,color:#fff
-    style INV_BOX fill:#1e1e3a,stroke:#8b5cf6,color:#fff
-    style PAY_BOX fill:#1e1e3a,stroke:#8b5cf6,color:#fff
-    style Frontend fill:#1e3a5f,stroke:#3b82f6,color:#fff
-    style SERVICES fill:#0d0d1a,stroke:#6366f1,color:#fff
-```
+flowchart TB
+ subgraph GATEWAY["Composer / API Gateway - :8080"]
+        COMPOSER["FastAPI Gateway"]
+        COMP_AUTH["Authentication<br>POST /api/auth/register<br>POST /api/auth/login<br>POST /api/auth/refresh<br>GET /api/auth/me<br>POST /api/auth/logout<br>POST /api/auth/forgot-password<br>POST /api/auth/reset-password<br>DELETE /api/auth/me<br>POST /api/auth/browser/handoff<br>POST /api/auth/browser/exchange"]
+        COMP_EVENTS["Events, Tickets and Reservations<br>GET|POST /api/events<br>GET|PUT|DELETE /api/events/{event_id}<br>POST|GET /api/events/{event_id}/tickets<br>GET /api/tickets/{ticket_id}/availability<br>POST /api/reservations<br>GET /api/reservations/{ticket_id}"]
+        COMP_PAY["Payments<br>GET /api/payment-account<br>POST /api/payment-account/setup<br>GET|POST /api/payments<br>GET /api/payments/{payment_id}<br>POST /api/payments/{payment_id}/confirm<br>POST /api/payments/{payment_id}/cancel<br>GET /api/payments/{payment_id}/receipt"]
+        COMP_SAGA["Checkout and Refund Orchestration<br>POST /api/checkout<br>GET /api/checkout/success<br>GET /api/checkout/cancel<br>POST /api/refund<br>GET /health"]
+  end
+ subgraph AUTH_BOX["Authentication Service API - :8000"]
+        AUTH_API["/api/v1/auth<br>POST /register<br>POST /login<br>POST /refresh<br>GET /me<br>POST /logout<br>POST /verify (X-Service-Auth)<br>POST /forgot-password<br>POST /reset-password<br>DELETE /me<br>GET /health"]
+  end
+ subgraph INVENTORY_BOX["Inventory Service API"]
+        INV_API["/api/v1/events<br>POST /api/v1/events<br>GET /api/v1/events<br>GET|PUT|DELETE /api/v1/events/{event_id}<br>POST|GET /api/v1/events/{event_id}/tickets<br><br>/api/v1/tickets<br>GET /api/v1/tickets/{ticket_id}<br>PUT /api/v1/tickets/{ticket_id}/reserve<br>PUT /api/v1/tickets/{ticket_id}/sell<br>PUT /api/v1/tickets/{ticket_id}/use<br>DELETE /api/v1/tickets/{ticket_id}<br>GET /health"]
+  end
+ subgraph PAYMENT_BOX["Payment Service API - :8002 public / :8000 internal"]
+        PAY_API["/api/v1/checkout<br>POST /api/v1/checkout<br>GET /api/v1/checkout/{session_id}<br>POST /api/v1/checkout/{session_id}/authorize<br><br>/api/v1/customers<br>POST /api/v1/customers<br>GET /api/v1/customers<br>GET /api/v1/customers/me/transactions<br>GET|PUT|DELETE /api/v1/customers/{customer_id}<br><br>/api/v1/payments<br>POST /api/v1/payments<br>GET /api/v1/payments<br>GET /api/v1/payments/{payment_id}<br>PUT /api/v1/payments/{payment_id}/confirm<br>DELETE /api/v1/payments/{payment_id} (cancel or refund)<br>GET /api/v1/payments/{payment_id}/receipt<br><br>/api/v1/admin/api-keys<br>POST|GET /api/v1/admin/api-keys<br>GET|PUT|DELETE /api/v1/admin/api-keys/{key_id}"]
+  end
+    COMPOSER --> COMP_AUTH & COMP_EVENTS & COMP_PAY & COMP_SAGA
+    COMP_AUTH -- proxy / browser callback --> AUTH_API
+    COMP_EVENTS -- proxy + saga --> INV_API
+    COMP_PAY -- customer lookup/setup + payments --> PAY_API
+    COMP_SAGA -- profile + verify --> AUTH_API
+    COMP_SAGA -- reserve/sell/release tickets --> INV_API
+    COMP_SAGA -- hosted checkout + cancel/refund --> PAY_API
+    PAY_API -- "POST /api/v1/auth/verify + X-Service-Auth" --> AUTH_API

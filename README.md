@@ -33,6 +33,13 @@ Service     Service     Service
 | POST | `/api/auth/reset-password` | Aplicar nova password com token |
 | DELETE | `/api/auth/me` | Eliminar conta autenticada |
 
+### Auth Browser Handoff
+
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| POST | `/api/auth/browser/handoff` | Receber tokens do frontend separado do Auth e devolver redirect com código one-time |
+| POST | `/api/auth/browser/exchange` | Trocar código one-time pela sessão local do Composer |
+
 ### Events (`/api/events`)
 
 | Método | Rota | Descrição |
@@ -58,6 +65,13 @@ Service     Service     Service
 | POST | `/api/reservations` | Reservar bilhetes |
 | GET | `/api/reservations/{id}` | Ver estado da reserva |
 
+### Payment Account (`/api/payment-account`)
+
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/api/payment-account` | Verificar se o utilizador autenticado já tem customer local no Payment Service |
+| POST | `/api/payment-account/setup` | Criar explicitamente a conta local de Payment para o utilizador autenticado |
+
 ### Payments (`/api/payments`)
 
 | Método | Rota | Descrição |
@@ -73,7 +87,9 @@ Service     Service     Service
 
 | Método | Rota | Descrição |
 |--------|------|-----------|
-| POST | `/api/checkout` | Checkout completo (reserva → paga → confirma) |
+| POST | `/api/checkout` | Checkout hosted (reserva → cria sessão no Payment → redireciona para `/checkout/{session_id}`) |
+| GET | `/api/checkout/success` | Callback de sucesso do checkout hosted |
+| GET | `/api/checkout/cancel` | Callback de cancelamento com compensação das reservas |
 | POST | `/api/refund` | Reembolso completo (devolve → cancela reserva) |
 
 ### Health
@@ -108,7 +124,12 @@ docker compose ps
 
 O Composer fica disponível em **http://localhost:8080**
 
-Para compatibilidade com o frontend estático da equipa de auth, o Auth Service fica também exposto em **http://localhost:8000**.
+Para compatibilidade com os frontends estáticos das equipas:
+
+- Auth Service → **http://localhost:8000**
+- Payment Service (API + wallet UI + hosted checkout) → **http://localhost:8002**
+
+O `docker-compose.yml` também já injeta `AUTH_SERVICE_URL=http://auth-service:8000` e `INTERNAL_SERVICE_KEY` no Payment Service para que ele valide Bearer tokens no Auth através de `/api/v1/auth/verify`.
 
 Para parar tudo:
 
@@ -148,6 +169,7 @@ uvicorn main:app --reload --port 8080
 | `AUTH_PASSWORD_RESET_LINK_PATH` | `/templates/reset_password.html` | Path do frontend do Auth que recebe o token de reset |
 | `INVENTORY_SERVICE_URL` | `http://inventory-service:8000` | URL do Inventory Service |
 | `PAYMENT_SERVICE_URL` | `http://payment-service:8000` | URL do Payment Service |
+| `PAYMENT_PUBLIC_URL` | `http://localhost:8002` | Base pública do Payment para wallet UI e hosted checkout |
 | `INVENTORY_API_KEY` | `your-secret-api-key` | API Key para o Inventory |
 | `PAYMENT_API_KEY` | `your-secret-api-key` | API Key para o Payment |
 | `PAYMENT_ADMIN_API_KEY` | `admin-dev-key-2024` | Admin key bootstrap do Payment Service |
@@ -155,7 +177,7 @@ uvicorn main:app --reload --port 8080
 | `EVENT_MUTATIONS_REQUIRE_ADMIN` | `false` | Se `true`, criar/editar/apagar eventos e criar tickets exige utilizador com role admin |
 | `EVENT_ADMIN_ROLES` | `admin` | Lista de roles permitidas para mutações de eventos (separadas por vírgula) |
 
-> **Nota:** Para o checkout/refund funcionar com pagamentos reais, é preciso configurar as Stripe test keys no `.env` do Payment Service (`STRIPE_SECRET_KEY` e `STRIPE_WEBHOOK_SECRET`).
+> **Nota:** O Payment já não faz auth própria. O backend dele valida Bearer tokens com o Auth Service via `/api/v1/auth/verify`, por isso as duas configs críticas aí são `AUTH_SERVICE_URL` e `INTERNAL_SERVICE_KEY`.
 
 > **Nota:** Em modo compatibilidade (`EVENT_MUTATIONS_REQUIRE_ADMIN=false`), o Composer continua a aceitar mutações via API key interna, mas já propaga contexto de utilizador para facilitar migração quando o Inventory passar a exigir role.
 
@@ -168,6 +190,8 @@ O Auth Service deixou de servir templates server-side. Os links de reset devem a
 O frontend estático do auth que está no repositório EGS chama a API diretamente em `http://localhost:8000/api/v1`. Por isso, este `docker-compose.yml` expõe o Auth Service na porta `8000` e já inclui `http://localhost:5500`/`http://127.0.0.1:5500` em `AUTH_BACKEND_CORS_ORIGINS`.
 
 Usar o mesmo Auth Service não implica juntar os fluxos de negócio de FlashSale e Payment. O Auth centraliza identidade; cada serviço continua a ter as suas próprias regras, permissões e onboarding.
+
+No Payment isso significa que o login pode ser partilhado, mas o customer local continua a ser separado. No Composer, esse passo ficou explícito em `POST /api/payment-account/setup`.
 
 Para o login browser completo com frontend separado, o Composer expõe dois endpoints internos de integração:
 
@@ -289,7 +313,16 @@ echo "EVENT_ID=$EVENT_ID"
 
 > Se não houver eventos, cria um no endpoint `POST /api/events` e repete este passo.
 
-### 7. Iniciar checkout (Saga)
+### 7. Criar conta local de Payment
+
+```bash
+curl -s -X POST http://localhost:8080/api/payment-account/setup \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+> Este passo cria o customer local no Payment Service. A identidade vem do Auth, mas a conta de Payment continua a ser separada.
+
+### 8. Iniciar checkout (Saga)
 
 ```bash
 curl -s -X POST http://localhost:8080/api/checkout \
@@ -304,11 +337,11 @@ curl -s -X POST http://localhost:8080/api/checkout \
   }" | python3 -m json.tool
 ```
 
-### 8. Abrir o checkout_url no browser
+### 9. Abrir o checkout_url no browser
 
 No JSON da resposta anterior, abre o campo `checkout_url` no browser para concluir a compra.
 
-### 9. Frontend (opcional para demo visual)
+### 10. Frontend (opcional para demo visual)
 
 ```bash
 cd ~/composer-egs/frontend
@@ -326,6 +359,10 @@ VITE_AUTH_UI_BASE_URL=http://localhost:5500
 VITE_AUTH_UI_LOGIN_PATH=/templates/login.html
 VITE_AUTH_UI_REGISTER_PATH=/templates/register.html
 VITE_AUTH_UI_FORGOT_PATH=/templates/forgot_password.html
+VITE_PAYMENT_UI_BASE_URL=http://localhost:8002
+VITE_PAYMENT_UI_LOGIN_PATH=/wallet/login
+VITE_PAYMENT_UI_REGISTER_PATH=/wallet/register
+VITE_PAYMENT_UI_DASHBOARD_PATH=/wallet/dashboard
 ```
 
 Se usares o frontend do teu colega tal como ele está, não mudes a porta do Auth Service: os templates dele estão hardcoded para `http://localhost:8000/api/v1`.
@@ -336,6 +373,14 @@ O fluxo completo de login fica assim:
 2. A UI de auth autentica o utilizador e entrega os tokens ao `POST /api/auth/browser/handoff` do Composer.
 3. O Composer devolve um redirect com código one-time.
 4. O frontend do Composer recebe esse código, chama `POST /api/auth/browser/exchange` e cria a sua própria sessão local.
+
+O fluxo de Payment fica assim:
+
+1. O utilizador autentica-se no Auth Service.
+2. O Composer cria ou verifica a conta local do Payment em `POST /api/payment-account/setup`.
+3. O Composer cria a hosted checkout session em `POST /api/v1/checkout` do Payment.
+4. O browser é redirecionado para `http://localhost:8002/checkout/{session_id}`.
+5. A wallet UI do Payment usa o Bearer token do Auth para chamar `POST /api/v1/checkout/{session_id}/authorize`.
 
 Se estiveres a usar o frontend do teu colega tal como está no repositório dele:
 
@@ -494,7 +539,14 @@ curl -s http://localhost:8080/api/payments \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
-### 14. Checkout Completo (Saga)
+### 14. Criar Conta Local de Payment
+
+```bash
+curl -s -X POST http://localhost:8080/api/payment-account/setup \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+### 15. Checkout Completo (Saga)
 
 ```bash
 curl -s -X POST http://localhost:8080/api/checkout \
@@ -503,14 +555,15 @@ curl -s -X POST http://localhost:8080/api/checkout \
   -d "{
     \"event_id\": \"${EVENT_ID}\",
     \"quantity\": 2,
-    \"payment_method_id\": \"pm_card_visa\",
+    \"success_url\": \"http://localhost:5173/?status=success\",
+    \"cancel_url\": \"http://localhost:5173/?status=cancel\",
     \"amount_cents\": 9998
   }" | python3 -m json.tool
 ```
 
-> ⚠️ Sem Stripe keys reais, o pagamento é recusado e a reserva é cancelada automaticamente (Saga compensation). Com keys válidas, devolve `{"status": "sucesso", ...}`.
+> O Composer devolve um `checkout_url` público do Payment (`http://localhost:8002/checkout/{session_id}`) para o browser concluir a autorização.
 
-### 15. Reembolso (Saga)
+### 16. Reembolso (Saga)
 
 ```bash
 curl -s -X POST http://localhost:8080/api/refund \
@@ -535,16 +588,17 @@ Para operações que envolvem múltiplos serviços (`/api/checkout` e `/api/refu
 
 ```
 CHECKOUT:
-  1. Verifica token (Auth)
-  2. Reserva bilhetes (Inventory → POST /events/{id}/tickets/reserve)
-  3. Processa pagamento (Payment → POST /payments)
-  4a. ✅ Sucesso → Confirma cada bilhete (Inventory → POST /tickets/{id}/confirm)
-  4b. ❌ Falha   → Cancela cada bilhete (Inventory → POST /tickets/{id}/cancel)
+  1. Obtém perfil autenticado (Auth → GET /api/v1/auth/me)
+  2. Verifica se existe customer local no Payment
+  3. Reserva bilhetes (Inventory → PUT /api/v1/tickets/{id}/reserve)
+  4. Cria sessão hosted (Payment → POST /api/v1/checkout)
+  5a. ✅ Sucesso → Confirma cada bilhete (Inventory → PUT /api/v1/tickets/{id}/sell)
+  5b. ❌ Falha   → Liberta cada bilhete (Inventory → DELETE /api/v1/tickets/{id})
 
 REFUND:
-  1. Verifica token (Auth)
-  2. Cria reembolso (Payment → POST /refunds)
-  3. Cancela cada bilhete (Inventory → POST /tickets/{id}/cancel)
+  1. Verifica token (Auth → POST /api/v1/auth/verify)
+  2. Cancela/reembolsa pagamento (Payment → DELETE /api/v1/payments/{payment_id})
+  3. Liberta cada bilhete (Inventory → DELETE /api/v1/tickets/{id})
 ```
 
 ### Mapeamento de Rotas (Composer → Backend)
@@ -552,14 +606,20 @@ REFUND:
 | Composer | Backend Real |
 |----------|-------------|
 | `/api/auth/*` | Auth Service → `/api/v1/auth/*` |
+| `/api/auth/browser/*` | Integração browser-only do Composer com o frontend separado do Auth |
 | `/api/events/*` | Inventory → `/api/v1/events/*` |
 | `/api/events/{id}/tickets` | Inventory → `/api/v1/events/{id}/tickets` |
 | `/api/tickets/{id}/availability` | Inventory → `/api/v1/tickets/{id}` |
-| `/api/reservations` (POST) | Inventory → `/api/v1/events/{id}/tickets/reserve` |
+| `/api/reservations` (POST) | Inventory → `GET /api/v1/events/{id}/tickets` + `PUT /api/v1/tickets/{id}/reserve` |
 | `/api/reservations/{id}` (GET) | Inventory → `/api/v1/tickets/{id}` |
+| `/api/payment-account` | Payment → `/api/v1/customers` (lookup por email) |
+| `/api/payment-account/setup` | Payment → `POST /api/v1/customers` |
 | `/api/payments/*` | Payment → `/api/v1/payments/*` |
 | `/api/payments/{id}/confirm` (POST) | Payment → `PUT /api/v1/payments/{id}/confirm` |
 | `/api/payments/{id}/cancel` (POST) | Payment → `DELETE /api/v1/payments/{id}` |
+| `/api/checkout` | Auth + Inventory + Payment (`POST /api/v1/checkout`) |
+| `/api/checkout/success` | Payment → `GET /api/v1/checkout/{session_id}` |
+| `/api/refund` | Auth `/verify` + Payment `DELETE /api/v1/payments/{payment_id}` + Inventory `DELETE /api/v1/tickets/{id}` |
 
 ---
 
@@ -582,14 +642,14 @@ O `docker-compose.yml` unificado sobe **10 containers**:
 | Container | Serviço | Porta Externa |
 |-----------|---------|---------------|
 | `composer` | API Gateway | 8080 |
-| `auth-service` | Auth API | — (interna) |
+| `auth-service` | Auth API | 8000 |
 | `auth-postgres` | Auth DB | — |
 | `auth-redis` | Auth Cache | — |
 | `inventory-service` | Inventory API | — (interna) |
 | `inv-postgres` | Inventory DB | — |
 | `inv-redis` | Inventory Cache | — |
-| `payment-service` | Payment API | — (interna) |
+| `payment-service` | Payment API + Wallet UI | 8002 |
 | `pay-postgres` | Payment DB | — |
 | `pay-redis` | Payment Cache | — |
 
-Apenas o Composer expõe porta externamente (8080). Todos os outros serviços comunicam pela rede interna `flashsale`.
+O Composer expõe `8080`, o Auth expõe `8000` para os templates estáticos da equipa de auth, e o Payment expõe `8002` para a wallet UI e para o hosted checkout. O resto comunica pela rede interna `flashsale`.

@@ -9,6 +9,10 @@ const AUTH_UI_BASE_URL = import.meta.env.VITE_AUTH_UI_BASE_URL || 'http://localh
 const AUTH_UI_LOGIN_PATH = import.meta.env.VITE_AUTH_UI_LOGIN_PATH || '/templates/login.html';
 const AUTH_UI_REGISTER_PATH = import.meta.env.VITE_AUTH_UI_REGISTER_PATH || '/templates/register.html';
 const AUTH_UI_FORGOT_PATH = import.meta.env.VITE_AUTH_UI_FORGOT_PATH || '/templates/forgot_password.html';
+const PAYMENT_UI_BASE_URL = import.meta.env.VITE_PAYMENT_UI_BASE_URL || 'http://localhost:8002';
+const PAYMENT_UI_LOGIN_PATH = import.meta.env.VITE_PAYMENT_UI_LOGIN_PATH || '/wallet/login';
+const PAYMENT_UI_REGISTER_PATH = import.meta.env.VITE_PAYMENT_UI_REGISTER_PATH || '/wallet/register';
+const PAYMENT_UI_DASHBOARD_PATH = import.meta.env.VITE_PAYMENT_UI_DASHBOARD_PATH || '/wallet/dashboard';
 const AUTH_STATE_STORAGE_KEY = 'flashsale_auth_state';
 const REFRESH_TOKEN_STORAGE_KEY = 'flashsale_refresh_token';
 const AUTH_EXCHANGE_PROMISE_KEY = '__flashsaleAuthExchangePromise';
@@ -22,6 +26,8 @@ const buildAuthUiUrl = (path, query = {}) => {
   });
   return url.toString();
 };
+
+const buildPaymentUiUrl = (path) => new URL(path, PAYMENT_UI_BASE_URL).toString();
 
 const buildApiUrl = (path) => new URL(path, API_BASE_URL || window.location.origin).toString();
 
@@ -87,6 +93,10 @@ function App() {
   const [payments, setPayments] = useState([]);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [paymentsError, setPaymentsError] = useState('');
+  const [paymentAccount, setPaymentAccount] = useState(null);
+  const [paymentAccountLoading, setPaymentAccountLoading] = useState(false);
+  const [paymentAccountSetupLoading, setPaymentAccountSetupLoading] = useState(false);
+  const [paymentAccountError, setPaymentAccountError] = useState('');
 
   const [refundPaymentId, setRefundPaymentId] = useState('');
   const [refundTicketIds, setRefundTicketIds] = useState('');
@@ -103,10 +113,13 @@ function App() {
       localStorage.removeItem('flashsale_token');
       setUser(null);
       setWalletActionUrl('');
+      setPaymentAccount(null);
+      setPaymentAccountError('');
       return;
     }
     fetchProfile(token);
     fetchPayments(token);
+    fetchPaymentAccount(token);
   }, [token]);
 
   useEffect(() => {
@@ -279,6 +292,8 @@ function App() {
       setToken(null);
       setUser(null);
       setPayments([]);
+      setPaymentAccount(null);
+      setPaymentAccountError('');
       setReservationResult(null);
       setReservationStatusResult(null);
       setRefundResult(null);
@@ -302,6 +317,40 @@ function App() {
     } finally {
       setPaymentsLoading(false);
     }
+  };
+
+  const fetchPaymentAccount = async (activeToken = token) => {
+    if (!activeToken) return;
+    setPaymentAccountLoading(true);
+    setPaymentAccountError('');
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/payment-account`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      setPaymentAccount(res.data || null);
+      if (res.data?.exists) {
+        setWalletActionUrl(buildPaymentUiUrl(PAYMENT_UI_DASHBOARD_PATH));
+      } else {
+        setWalletActionUrl(buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH));
+      }
+    } catch (error) {
+      setPaymentAccount(null);
+      setPaymentAccountError(extractErrorMessage(error, 'Could not load payment account status'));
+    } finally {
+      setPaymentAccountLoading(false);
+    }
+  };
+
+  const setupPaymentAccount = async () => {
+    if (!token) {
+      setAuthError('Please sign in before creating a Payment account.');
+      return;
+    }
+
+    const registerUrl = buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH);
+    setWalletActionUrl(registerUrl);
+    setFlowInfo('Redirecting to Payment register page...');
+    window.location.href = registerUrl;
   };
 
   const reserveTickets = async () => {
@@ -402,7 +451,12 @@ function App() {
       if (detailObject?.code === 'wallet_setup_required') {
         const guidance = detailObject?.message || 'Wallet setup is required before checkout.';
         setFlowInfo(guidance);
-        setWalletActionUrl(detailObject?.action_url || '');
+        setWalletActionUrl(
+          detailObject?.wallet_register_url
+          || detailObject?.action_url
+          || buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH)
+        );
+        setPaymentAccount({ exists: false, customer: null, identity_email: user?.email || '' });
         setToast({ type: 'warning', text: guidance });
       } else {
         setToast({ type: 'error', text: 'Checkout error: ' + extractErrorMessage(error, 'Could not start checkout') });
@@ -489,13 +543,6 @@ function App() {
       )}
 
       {flowInfo && <div className="flow-note">{flowInfo}</div>}
-      {walletActionUrl && (
-        <div className="flow-note">
-          Wallet setup required.
-          {' '}
-          <a href={walletActionUrl} target="_blank" rel="noreferrer">Open wallet setup</a>
-        </div>
-      )}
 
       <section className="auth-panel">
         <div className="auth-status copy-block">
@@ -630,14 +677,22 @@ function App() {
                 <h2>Profile</h2>
                 <p><strong>Email:</strong> {profileLoading ? 'Loading...' : (user?.email || 'N/A')}</p>
                 <p><strong>Name:</strong> {profileLoading ? 'Loading...' : (user?.full_name || 'N/A')}</p>
-                {walletActionUrl && (
-                  <p className="hint">
-                    Wallet not configured.
-                    {' '}
-                    <a href={walletActionUrl} target="_blank" rel="noreferrer">Setup now</a>
-                  </p>
+                <p>
+                  <strong>Local Payment account:</strong>
+                  {' '}
+                  {paymentAccountLoading
+                    ? 'Checking...'
+                    : paymentAccount?.exists
+                      ? 'ready'
+                      : 'not created yet'}
+                </p>
+                {!paymentAccount?.exists && (
+                  <button className="btn" onClick={setupPaymentAccount}>
+                    Create Payment Account
+                  </button>
                 )}
                 {profileError && <p className="error-msg">Profile error: {profileError}</p>}
+                {paymentAccountError && <p className="error-msg">Payment account: {paymentAccountError}</p>}
                 <button className="btn btn-outline" onClick={() => fetchProfile(token)}>Refresh Profile</button>
               </article>
 

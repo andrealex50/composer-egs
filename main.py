@@ -162,6 +162,10 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
     return token or None
 
 
+def _normalize_email(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
 def _cleanup_browser_handoff_codes() -> None:
     now = time.time()
     expired_codes = [
@@ -268,11 +272,28 @@ async def _get_authenticated_claims(authorization: str | None, request: Request 
     if not token:
         raise HTTPException(status_code=401, detail="Token em falta")
     claims = await _verify_user_token(token, request)
-    email = str(claims.get("email") or "").strip().lower()
+    email = _normalize_email(claims.get("email"))
     if not email:
         raise HTTPException(status_code=401, detail="Token inválido")
     claims["_normalized_email"] = email
     return claims
+
+
+async def _get_authenticated_user_profile(authorization: str | None, request: Request | None = None) -> dict:
+    """Obtém claims e perfil do Auth Service para o utilizador autenticado."""
+    claims = await _get_authenticated_claims(authorization, request)
+    profile = await proxy(
+        "GET",
+        f"{AUTH_SERVICE_URL}/api/v1/auth/me",
+        headers=_auth_headers(authorization),
+        service_label="Auth Service",
+        request=request,
+    )
+    profile["_normalized_email"] = claims["_normalized_email"]
+    profile.setdefault("email", claims.get("email"))
+    profile.setdefault("role", claims.get("role"))
+    profile.setdefault("id", claims.get("user_id"))
+    return profile
 
 
 async def _find_payment_customer_by_email(email: str, request: Request | None = None) -> dict | None:
@@ -291,6 +312,23 @@ async def _find_payment_customer_by_email(email: str, request: Request | None = 
         if item_email == email:
             return item
     return items[0] if items else None
+
+
+def _build_payment_customer_payload(profile: dict) -> dict:
+    """Cria payload idempotente para provisionar customer local no Payment Service."""
+    metadata = {
+        "source": "composer",
+        "auth_user_id": str(profile.get("id") or ""),
+        "auth_role": str(profile.get("role") or ""),
+    }
+    metadata = {key: value for key, value in metadata.items() if value}
+
+    payload = {
+        "email": profile.get("email"),
+        "name": profile.get("full_name") or None,
+        "metadata": metadata or None,
+    }
+    return {key: value for key, value in payload.items() if value is not None}
 
 
 async def _cancel_reserved_ticket(
@@ -587,9 +625,9 @@ async def ticket_availability(ticket_id: str, request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. RESERVATIONS  —  /api/reservations
 #    Backend: Inventory NÃO tem /reservations. Reservas = operações sobre tickets:
-#      - Criar reserva   → POST /api/v1/events/{event_id}/tickets/reserve
-#      - Confirmar        → POST /api/v1/tickets/{ticket_id}/confirm
-#      - Cancelar         → POST /api/v1/tickets/{ticket_id}/cancel
+#      - Criar reserva   → GET /api/v1/events/{event_id}/tickets + PUT /api/v1/tickets/{ticket_id}/reserve
+#      - Confirmar       → PUT /api/v1/tickets/{ticket_id}/sell
+#      - Cancelar        → DELETE /api/v1/tickets/{ticket_id}
 #      - Ver reserva      → GET  /api/v1/tickets/{ticket_id}  (status=reserved)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -664,11 +702,15 @@ async def list_payments(request: Request, authorization: Optional[str] = Header(
     limit = int(params.get("limit", 20)) if str(params.get("limit", "")).isdigit() else 20
     offset = int(params.get("offset", 0)) if str(params.get("offset", "")).isdigit() else 0
 
-    if not customer or not customer.get("id"):
-        return {"items": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+    # Fetch a page from Payment Service and filter it by ownership rules:
+    # 1) payments owned by current local payment customer
+    # 2) payments initiated by this authenticated Composer identity
+    upstream_limit = max(100, limit + offset)
+    params.pop("customer_id", None)
+    params["limit"] = upstream_limit
+    params["offset"] = 0
 
-    params["customer_id"] = str(customer["id"])
-    return await proxy(
+    payload = await proxy(
         "GET",
         f"{PAYMENT_SERVICE_URL}/api/v1/payments",
         headers=_pay_headers(request=request),
@@ -676,6 +718,65 @@ async def list_payments(request: Request, authorization: Optional[str] = Header(
         service_label="Payment Service",
         request=request,
     )
+
+    customer_id = str(customer.get("id")) if customer and customer.get("id") else None
+    auth_user_id = str(claims.get("user_id") or "")
+
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    filtered = []
+    for item in items:
+        item_customer_id = str(item.get("customer_id") or "")
+        item_meta = item.get("metadata") or {}
+        initiator_id = str(item_meta.get("composer_initiator_auth_user_id") or "")
+        if (customer_id and item_customer_id == customer_id) or (auth_user_id and initiator_id == auth_user_id):
+            filtered.append(item)
+
+    paged_items = filtered[offset: offset + limit]
+    total = len(filtered)
+    return {
+        "items": paged_items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": (offset + limit) < total,
+    }
+
+
+@app.get("/api/payment-account", summary="Verificar conta local no Payment Service", tags=["Payments"])
+async def get_payment_account(request: Request, authorization: Optional[str] = Header(None)):
+    profile = await _get_authenticated_user_profile(authorization, request)
+    customer = await _find_payment_customer_by_email(profile["_normalized_email"], request)
+    return {
+        "exists": bool(customer and customer.get("id")),
+        "customer": customer,
+        "identity_email": profile.get("email"),
+    }
+
+
+@app.post("/api/payment-account/setup", summary="Criar conta local no Payment Service", tags=["Payments"])
+async def setup_payment_account(request: Request, authorization: Optional[str] = Header(None)):
+    profile = await _get_authenticated_user_profile(authorization, request)
+    existing_customer = await _find_payment_customer_by_email(profile["_normalized_email"], request)
+    if existing_customer and existing_customer.get("id"):
+        return {
+            "created": False,
+            "customer": existing_customer,
+            "message": "A conta local do Payment Service já existe para este email.",
+        }
+
+    customer = await proxy(
+        "POST",
+        f"{PAYMENT_SERVICE_URL}/api/v1/customers",
+        headers=_pay_headers(str(uuid.uuid4()), request=request),
+        json=_build_payment_customer_payload(profile),
+        service_label="Payment Service",
+        request=request,
+    )
+    return {
+        "created": True,
+        "customer": customer,
+        "message": "Conta local do Payment Service criada com sucesso.",
+    }
 
 
 @app.post("/api/payments", summary="Criar pagamento", tags=["Payments"])
@@ -767,31 +868,15 @@ async def download_receipt(payment_id: str, request: Request, authorization: Opt
 async def checkout(request: Request, order: CheckoutRequest, authorization: Optional[str] = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Token em falta")
-    token = authorization.replace("Bearer ", "")
+    if not _extract_bearer_token(authorization):
+        raise HTTPException(status_code=401, detail="Token inválido")
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         # 1. Obter dados do utilizador do Auth Service
-        me_resp = await client.get(
-            f"{AUTH_SERVICE_URL}/api/v1/auth/me",
-            headers=_with_trace_headers({"Authorization": f"Bearer {token}"}, request),
-        )
-        if me_resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="Não autorizado")
-        user_data = me_resp.json()
-        user_email = str(user_data.get("email") or "").strip().lower()
+        user_data = await _get_authenticated_user_profile(authorization, request)
+        user_email = user_data["_normalized_email"]
         if not user_email:
             raise HTTPException(status_code=401, detail="Sessão inválida: email em falta")
-
-        customer = await _find_payment_customer_by_email(user_email, request)
-        if not customer or not customer.get("id"):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "wallet_setup_required",
-                    "message": "Configura primeiro a tua wallet no serviço de pagamentos para concluir o checkout.",
-                    "action_url": f"{PAYMENT_PUBLIC_URL}/docs#/Authentication/register_customer_auth_register_post",
-                },
-            )
 
         # 2. Reservar bilhetes no Inventory Service
         inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
@@ -849,16 +934,17 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
             "currency": "eur",
             "success_url": composer_success,
             "cancel_url": composer_cancel,
-            "customer_email": user_data.get("email"),
-            "customer_name": user_data.get("full_name"),
             "metadata": {
                 "ticket_ids": ticket_ids_str,
-                "frontend_success_url": order.success_url
+                "frontend_success_url": order.success_url,
+                "frontend_cancel_url": order.cancel_url,
+                "composer_initiator_email": user_data.get("email"),
+                "composer_initiator_auth_user_id": user_data.get("id"),
             }
         }
         
         pay_resp = await client.post(
-            f"{PAYMENT_SERVICE_URL}/api/v1/checkout/sessions",
+            f"{PAYMENT_SERVICE_URL}/api/v1/checkout",
             json=pay_payload,
             headers=_pay_headers(str(uuid.uuid4()), request=request),
         )
@@ -877,7 +963,10 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         payload = pay_resp.json()
         checkout_url = payload.get("checkout_url")
         if isinstance(checkout_url, str) and checkout_url.startswith(PAYMENT_SERVICE_URL):
-            payload["checkout_url"] = checkout_url.replace(PAYMENT_SERVICE_URL, PAYMENT_PUBLIC_URL, 1)
+            checkout_url = checkout_url.replace(PAYMENT_SERVICE_URL, PAYMENT_PUBLIC_URL, 1)
+
+        if isinstance(checkout_url, str) and checkout_url:
+            payload["checkout_url"] = _append_query_params(checkout_url, {"force_auth": "1"})
 
         return payload
 
@@ -887,7 +976,7 @@ async def checkout_success(session_id: str):
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Obter a Checkout Session para ler metadata
         sess_resp = await client.get(
-            f"{PAYMENT_SERVICE_URL}/api/v1/checkout/sessions/{session_id}",
+            f"{PAYMENT_SERVICE_URL}/api/v1/checkout/{session_id}",
             headers=_pay_headers()
         )
         if sess_resp.status_code != 200:
@@ -914,6 +1003,19 @@ async def checkout_success(session_id: str):
                 if confirm_resp.status_code in (200, 201):
                     confirmed.append(tid)
                 else:
+                    # Idempotency/dup callbacks: if ticket is already finalized,
+                    # treat it as success instead of forcing a cancel redirect.
+                    ticket_resp = await client.get(
+                        f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{tid}",
+                        headers=inv_headers,
+                    )
+                    if ticket_resp.status_code == 200:
+                        ticket_data = ticket_resp.json()
+                        ticket_status = str(ticket_data.get("status") or "").lower()
+                        if ticket_status in ("sold", "confirmed", "used"):
+                            confirmed.append(tid)
+                            continue
+
                     failed = True
                     break
 
@@ -961,7 +1063,7 @@ async def checkout_cancel(tickets: str = "", frontend_url: str = "/"):
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. REFUND  —  Orquestração de Reembolso
-#    1. Auth verify → 2. Payment create refund → 3. Inventory cancel tickets
+#    1. Auth verify → 2. Payment cancel/refund via DELETE /payments/{id} → 3. Inventory cancel tickets
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.post("/api/refund", summary="Reembolso completo (devolve + cancela)", tags=["Orchestration"])
@@ -978,23 +1080,18 @@ async def process_refund(request: Request, req: RefundRequest, authorization: Op
         if not claims.get("valid"):
             raise HTTPException(status_code=401, detail="Não autorizado")
 
-        # 2. Criar reembolso no Payment Service
-        #    Rota real: POST /api/v1/refunds
-        #    Body esperado: { "payment_id": UUID, "reason": str, ... }
-        refund_payload = {
-            "payment_id": req.payment_id,
-            "reason": req.reason,
-        }
-        ref_resp = await client.post(
-            f"{PAYMENT_SERVICE_URL}/api/v1/refunds",
-            json=refund_payload,
+        # 2. Cancelar/reembolsar pagamento no Payment Service
+        #    Rota real: DELETE /api/v1/payments/{payment_id}
+        #    O Payment decide se cancela (pending) ou faz refund (paid).
+        ref_resp = await client.delete(
+            f"{PAYMENT_SERVICE_URL}/api/v1/payments/{req.payment_id}",
             headers=_pay_headers(str(uuid.uuid4()), request=request),
         )
         if ref_resp.status_code not in (200, 201):
             raise HTTPException(status_code=400, detail="Erro ao processar reembolso.")
 
         # 3. Cancelar bilhetes no Inventory
-        #    Rota real: POST /api/v1/tickets/{ticket_id}/cancel
+        #    Rota real: DELETE /api/v1/tickets/{ticket_id}
         inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
         for tid in req.ticket_ids:
             await _cancel_reserved_ticket(
@@ -1006,7 +1103,8 @@ async def process_refund(request: Request, req: RefundRequest, authorization: Op
 
         return {
             "status": "reembolsado",
-            "refund_id": ref_resp.json().get("id"),
+            "payment_id": req.payment_id,
+            "payment_status": ref_resp.json().get("status"),
             "cancelled_tickets": req.ticket_ids,
         }
 

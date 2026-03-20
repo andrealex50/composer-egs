@@ -89,6 +89,25 @@ LOGIN=$(curl -s -X POST "$BASE/api/auth/login" \
 TOKEN=$(echo "$LOGIN" | json_get access_token)
 [ -n "$TOKEN" ] && pass || fail "re-login sem token"
 
+section "PAYMENT ACCOUNT VIA COMPOSER"
+echo "10.1 GET /api/payment-account"
+PAYMENT_ACCOUNT_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/payment-account" \
+  -H "Authorization: Bearer $TOKEN")
+[ "$PAYMENT_ACCOUNT_CODE" = "200" ] && pass || fail "payment-account expected 200, got $PAYMENT_ACCOUNT_CODE"
+
+echo "10.2 POST /api/payment-account/setup"
+PAYMENT_SETUP=$(curl -s -X POST "$BASE/api/payment-account/setup" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{}')
+PAYMENT_CUSTOMER_ID=$(echo "$PAYMENT_SETUP" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('customer') or {}).get('id',''))" 2>/dev/null)
+[ -n "$PAYMENT_CUSTOMER_ID" ] && pass || fail "payment-account/setup nao devolveu customer.id"
+
+echo "10.3 GET /api/payment-account apos setup"
+PAYMENT_EXISTS=$(curl -s "$BASE/api/payment-account" \
+  -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('exists', False))" 2>/dev/null)
+[ "$PAYMENT_EXISTS" = "True" ] && pass || fail "payment-account deveria existir apos setup"
+
 section "INVENTORY SERVICE VIA COMPOSER"
 echo "11. POST /api/events"
 EVENT=$(curl -s -X POST "$BASE/api/events" \
@@ -171,18 +190,10 @@ echo "22. checkout_url deve ser publico (localhost:8002)"
 echo "$CHECKOUT_URL" | grep -q '^http://localhost:8002/checkout/' && pass || fail "checkout_url nao foi reescrito para localhost:8002"
 
 echo "23. Autorizar sessao no payment-service"
-AUTH_RES=$(curl -s -X POST "http://localhost:8002/api/v1/checkout/sessions/$SESSION_ID/authorize" \
-  -H "Content-Type: application/json" \
-  -d "{\"password\":\"$PASSWORD\"}")
+AUTH_RES=$(curl -s -X POST "http://localhost:8002/api/v1/checkout/$SESSION_ID/authorize" \
+  -H "Authorization: Bearer $TOKEN")
 AUTH_STATUS=$(echo "$AUTH_RES" | json_get status)
-if [ "$AUTH_STATUS" = "succeeded" ]; then
-  pass
-elif echo "$AUTH_RES" | grep -qi "digital wallet password configured"; then
-  pass
-  echo "   nota: ambiente sem wallet password configurada, teste segue com callback"
-else
-  fail "authorize expected succeeded (ou detalhe conhecido de wallet), got '$AUTH_STATUS' - response: $AUTH_RES"
-fi
+[ "$AUTH_STATUS" = "succeeded" ] && pass || fail "authorize expected succeeded, got '$AUTH_STATUS' - response: $AUTH_RES"
 
 echo "24. Callback de sucesso do Composer"
 CB_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/checkout/success?session_id=$SESSION_ID")
