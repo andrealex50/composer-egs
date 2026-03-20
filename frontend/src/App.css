@@ -380,6 +380,7 @@ body {
 }
 
 .panel-card input,
+.panel-card select,
 .qty-row input {
   min-height: 40px;
   border-radius: 10px;
@@ -387,6 +388,53 @@ body {
   background: rgba(11, 18, 32, 0.72);
   color: var(--text-primary);
   padding: 0.46rem 0.6rem;
+}
+
+.manager-card {
+  gap: 0.8rem;
+}
+
+.manager-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(83, 182, 255, 0.28);
+  background: rgba(8, 15, 28, 0.34);
+}
+
+.manager-section h3 {
+  margin: 0;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.95rem;
+  color: #d6e7ff;
+}
+
+.manager-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.manager-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.manager-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+}
+
+.manager-actions-split {
+  grid-template-columns: 1fr 1fr;
+}
+
+.manager-actions-quad {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .qty-row {
@@ -595,6 +643,12 @@ button:focus-visible {
   }
 
   .event-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .manager-grid,
+  .manager-actions-split,
+  .manager-actions-quad {
     grid-template-columns: 1fr;
   }
 

@@ -3,8 +3,6 @@ import axios from 'axios';
 import './App.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
-const DEMO_EMAIL = 'testuser@example.com';
-const DEMO_PASSWORD = 'password123!';
 const AUTH_UI_BASE_URL = import.meta.env.VITE_AUTH_UI_BASE_URL || 'http://localhost:5500';
 const AUTH_UI_LOGIN_PATH = import.meta.env.VITE_AUTH_UI_LOGIN_PATH || '/templates/login.html';
 const AUTH_UI_REGISTER_PATH = import.meta.env.VITE_AUTH_UI_REGISTER_PATH || '/templates/register.html';
@@ -36,6 +34,56 @@ const createAuthState = () => {
     return window.crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const getPendingAuthStates = () => {
+  const raw = localStorage.getItem(AUTH_STATE_STORAGE_KEY);
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+    }
+  } catch (_error) {
+    // Legacy format used a single raw state string.
+  }
+
+  const legacy = String(raw).trim();
+  return legacy ? [legacy] : [];
+};
+
+const savePendingAuthStates = (states) => {
+  if (!states.length) {
+    localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(AUTH_STATE_STORAGE_KEY, JSON.stringify(states));
+};
+
+const addPendingAuthState = (state) => {
+  const normalized = String(state || '').trim();
+  if (!normalized) return;
+  const current = getPendingAuthStates();
+  const next = [...current.filter((item) => item !== normalized), normalized].slice(-10);
+  savePendingAuthStates(next);
+};
+
+const hasPendingAuthState = (state) => {
+  const normalized = String(state || '').trim();
+  if (!normalized) return false;
+  return getPendingAuthStates().includes(normalized);
+};
+
+const consumePendingAuthState = (state) => {
+  const normalized = String(state || '').trim();
+  if (!normalized) return;
+  const remaining = getPendingAuthStates().filter((item) => item !== normalized);
+  savePendingAuthStates(remaining);
+};
+
+const clearPendingAuthStates = () => {
+  localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
 };
 
 const getOrCreateAuthExchangePromise = (code, state) => {
@@ -102,6 +150,21 @@ function App() {
   const [refundTicketIds, setRefundTicketIds] = useState('');
   const [refundResult, setRefundResult] = useState(null);
   const [refundError, setRefundError] = useState('');
+  const [managerEventName, setManagerEventName] = useState('');
+  const [managerEventDate, setManagerEventDate] = useState('');
+  const [managerEventVenue, setManagerEventVenue] = useState('');
+  const [managerEventDescription, setManagerEventDescription] = useState('');
+  const [managerTargetEventId, setManagerTargetEventId] = useState('');
+  const [managerTargetEventStatus, setManagerTargetEventStatus] = useState('published');
+  const [managerBatchEventId, setManagerBatchEventId] = useState('');
+  const [managerBatchCategory, setManagerBatchCategory] = useState('General');
+  const [managerBatchPrice, setManagerBatchPrice] = useState('15.00');
+  const [managerBatchQuantity, setManagerBatchQuantity] = useState('50');
+  const [managerTicketId, setManagerTicketId] = useState('');
+  const [managerError, setManagerError] = useState('');
+  const [managerLoading, setManagerLoading] = useState(false);
+
+  const isPrivilegedUser = ['admin', 'promoter'].includes(String(user?.role || '').toLowerCase());
 
   useEffect(() => {
     fetchEvents();
@@ -128,12 +191,11 @@ function App() {
 
     const code = params.get('code');
     const state = params.get('state');
-    const expectedState = localStorage.getItem(AUTH_STATE_STORAGE_KEY);
     const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+    const hasMatchingState = hasPendingAuthState(state);
 
-    if (!code || !state || !expectedState || expectedState !== state) {
+    if (!code || !state || !hasMatchingState) {
       setAuthError('Secure login callback failed: invalid or missing state.');
-      localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
       window.history.replaceState({}, document.title, cleanUrl);
       return;
     }
@@ -155,13 +217,13 @@ function App() {
           localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
         }
 
-        localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
+        consumePendingAuthState(state);
         setUser(res.data?.user || null);
         setToken(res.data?.access_token || '');
         setToast({ type: 'success', text: 'Signed in via Auth UI.' });
       } catch (error) {
         if (cancelled) return;
-        localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
+        consumePendingAuthState(state);
         localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
         setAuthError('Secure login callback failed: ' + extractErrorMessage(error, 'Could not finish sign-in.'));
       } finally {
@@ -219,41 +281,6 @@ function App() {
       });
   };
 
-  const loginDummy = async () => {
-    try {
-      const res = await axios.post(`${API_BASE_URL}/api/auth/login`, {
-        email: DEMO_EMAIL,
-        password: DEMO_PASSWORD,
-      });
-      if (res.data?.refresh_token) {
-        localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, res.data.refresh_token);
-      } else {
-        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-      }
-      setToken(res.data.access_token);
-      setAuthError('');
-      setToast({ type: 'success', text: 'Signed in. You can purchase tickets now.' });
-      setActiveTab('overview');
-    } catch (e) {
-      console.error('Login detail', e);
-      setAuthError('Login failed: ' + extractErrorMessage(e, 'Make sure the user is registered.'));
-    }
-  };
-
-  const registerDummy = async () => {
-    try {
-      await axios.post(`${API_BASE_URL}/api/auth/register`, {
-        email: DEMO_EMAIL,
-        password: DEMO_PASSWORD,
-        full_name: 'Test User',
-      });
-      setToast({ type: 'success', text: 'Registration successful. You can now sign in.' });
-      setAuthError('');
-    } catch (e) {
-      setAuthError('Registration failed: ' + extractErrorMessage(e, 'Could not register user'));
-    }
-  };
-
   const fetchProfile = async (activeToken) => {
     setProfileLoading(true);
     setProfileError('');
@@ -288,7 +315,7 @@ function App() {
       // Ignore logout errors and clear local state anyway.
     } finally {
       localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-      localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
+      clearPendingAuthStates();
       setToken(null);
       setUser(null);
       setPayments([]);
@@ -418,6 +445,150 @@ function App() {
     }
   };
 
+  const ensurePrivilegedAccess = () => {
+    if (!token) {
+      setManagerError('Login required.');
+      return false;
+    }
+    if (!isPrivilegedUser) {
+      setManagerError('This action is restricted to promoter/admin users.');
+      return false;
+    }
+    return true;
+  };
+
+  const handleCreateEvent = async () => {
+    if (!ensurePrivilegedAccess()) return;
+    if (!managerEventName.trim() || !managerEventDate) {
+      setManagerError('Event name and date are required.');
+      return;
+    }
+
+    setManagerLoading(true);
+    setManagerError('');
+    try {
+      const payload = {
+        name: managerEventName.trim(),
+        description: managerEventDescription.trim() || null,
+        venue: managerEventVenue.trim() || null,
+        date: new Date(managerEventDate).toISOString(),
+      };
+      const res = await axios.post(`${API_BASE_URL}/api/events`, payload, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const createdId = res.data?.id || '';
+      setManagerTargetEventId(createdId);
+      setManagerBatchEventId(createdId);
+      setToast({ type: 'success', text: `Event created${createdId ? `: ${createdId}` : ''}.` });
+      fetchEvents();
+    } catch (error) {
+      setManagerError('Create event failed: ' + extractErrorMessage(error, 'Could not create event'));
+    } finally {
+      setManagerLoading(false);
+    }
+  };
+
+  const handleUpdateEventStatus = async () => {
+    if (!ensurePrivilegedAccess()) return;
+    if (!managerTargetEventId.trim()) {
+      setManagerError('Event ID is required.');
+      return;
+    }
+
+    setManagerLoading(true);
+    setManagerError('');
+    try {
+      await axios.put(
+        `${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`,
+        { status: managerTargetEventStatus },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setToast({ type: 'success', text: `Event status updated to ${managerTargetEventStatus}.` });
+      fetchEvents();
+    } catch (error) {
+      setManagerError('Update event failed: ' + extractErrorMessage(error, 'Could not update event'));
+    } finally {
+      setManagerLoading(false);
+    }
+  };
+
+  const handleDeleteEvent = async () => {
+    if (!ensurePrivilegedAccess()) return;
+    if (!managerTargetEventId.trim()) {
+      setManagerError('Event ID is required.');
+      return;
+    }
+
+    setManagerLoading(true);
+    setManagerError('');
+    try {
+      await axios.delete(`${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setToast({ type: 'success', text: 'Event deleted.' });
+      fetchEvents();
+    } catch (error) {
+      setManagerError('Delete event failed: ' + extractErrorMessage(error, 'Could not delete event'));
+    } finally {
+      setManagerLoading(false);
+    }
+  };
+
+  const handleCreateTicketBatch = async () => {
+    if (!ensurePrivilegedAccess()) return;
+    if (!managerBatchEventId.trim()) {
+      setManagerError('Event ID is required for ticket batch.');
+      return;
+    }
+
+    setManagerLoading(true);
+    setManagerError('');
+    try {
+      await axios.post(
+        `${API_BASE_URL}/api/events/${managerBatchEventId.trim()}/tickets`,
+        {
+          category: managerBatchCategory.trim() || 'General',
+          price: Number(managerBatchPrice || 0),
+          currency: 'EUR',
+          quantity: Number(managerBatchQuantity || 1),
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setToast({ type: 'success', text: 'Ticket batch created.' });
+    } catch (error) {
+      setManagerError('Create tickets failed: ' + extractErrorMessage(error, 'Could not create ticket batch'));
+    } finally {
+      setManagerLoading(false);
+    }
+  };
+
+  const handleTicketLifecycleAction = async (action) => {
+    if (!ensurePrivilegedAccess()) return;
+    if (!managerTicketId.trim()) {
+      setManagerError('Ticket ID is required.');
+      return;
+    }
+
+    setManagerLoading(true);
+    setManagerError('');
+    try {
+      const baseUrl = `${API_BASE_URL}/api/tickets/${managerTicketId.trim()}`;
+      const config = { headers: { Authorization: `Bearer ${token}` } };
+
+      if (action === 'cancel') {
+        await axios.delete(baseUrl, config);
+      } else {
+        await axios.put(`${baseUrl}/${action}`, {}, config);
+      }
+
+      setToast({ type: 'success', text: `Ticket action executed: ${action}.` });
+    } catch (error) {
+      setManagerError(`Ticket ${action} failed: ` + extractErrorMessage(error, 'Operation failed'));
+    } finally {
+      setManagerLoading(false);
+    }
+  };
+
   const handleCheckout = async (eventId) => {
     if (!token) {
       setAuthError('Please sign in before checkout.');
@@ -473,7 +644,7 @@ function App() {
 
   const startAuthUiFlow = (path) => {
     const state = createAuthState();
-    localStorage.setItem(AUTH_STATE_STORAGE_KEY, state);
+    addPendingAuthState(state);
     setAuthError('');
     setFlowInfo('Redirecting to the Auth UI...');
 
@@ -547,11 +718,10 @@ function App() {
       <section className="auth-panel">
         <div className="auth-status copy-block">
           {token ? (
-            <p>Signed in as <strong>{user?.email || DEMO_EMAIL}</strong>.</p>
+            <p>Signed in as <strong>{user?.email || 'N/A'}</strong>.</p>
           ) : (
             <>
-              <p>Welcome. Use the demo account to run the full buying flow.</p>
-              <p className="hint">Demo login: {DEMO_EMAIL} / {DEMO_PASSWORD}</p>
+              <p>Welcome. Sign in using the Auth UI to continue.</p>
               <p className="hint">The dedicated auth frontend remains separate. Sign-in there now returns securely to the Composer with a one-time handoff code.</p>
             </>
           )}
@@ -571,8 +741,6 @@ function App() {
               <a className="btn btn-outline" href={buildAuthUiUrl(AUTH_UI_FORGOT_PATH)}>
                 Forgot Password UI
               </a>
-              <button className="btn btn-outline" onClick={registerDummy} disabled={authRedirectLoading}>Register</button>
-              <button className="btn" onClick={loginDummy} disabled={authRedirectLoading}>Login</button>
             </>
           )}
         </div>
@@ -677,6 +845,7 @@ function App() {
                 <h2>Profile</h2>
                 <p><strong>Email:</strong> {profileLoading ? 'Loading...' : (user?.email || 'N/A')}</p>
                 <p><strong>Name:</strong> {profileLoading ? 'Loading...' : (user?.full_name || 'N/A')}</p>
+                <p><strong>Role:</strong> {profileLoading ? 'Loading...' : (user?.role || 'N/A')}</p>
                 <p>
                   <strong>Local Payment account:</strong>
                   {' '}
@@ -695,6 +864,168 @@ function App() {
                 {paymentAccountError && <p className="error-msg">Payment account: {paymentAccountError}</p>}
                 <button className="btn btn-outline" onClick={() => fetchProfile(token)}>Refresh Profile</button>
               </article>
+
+              {isPrivilegedUser && (
+                <article className="panel-card reveal manager-card">
+                  <h2>Promoter/Admin Controls</h2>
+                  <p className="hint">Manage events and tickets from one place.</p>
+
+                  <div className="manager-section">
+                    <h3>Event Creation</h3>
+                    <div className="manager-grid">
+                      <div>
+                        <label>New Event Name</label>
+                        <input
+                          value={managerEventName}
+                          onChange={(e) => setManagerEventName(e.target.value)}
+                          placeholder="Event name"
+                        />
+                      </div>
+                      <div>
+                        <label>New Event Date</label>
+                        <input
+                          type="datetime-local"
+                          value={managerEventDate}
+                          onChange={(e) => setManagerEventDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="manager-grid">
+                      <div>
+                        <label>Venue</label>
+                        <input
+                          value={managerEventVenue}
+                          onChange={(e) => setManagerEventVenue(e.target.value)}
+                          placeholder="Venue"
+                        />
+                      </div>
+                      <div>
+                        <label>Description</label>
+                        <input
+                          value={managerEventDescription}
+                          onChange={(e) => setManagerEventDescription(e.target.value)}
+                          placeholder="Description"
+                        />
+                      </div>
+                    </div>
+                    <div className="manager-actions">
+                      <button className="btn" onClick={handleCreateEvent} disabled={managerLoading}>
+                        Create Event
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="manager-section">
+                    <h3>Event Management</h3>
+                    <div className="manager-grid">
+                      <div>
+                        <label>Target Event ID</label>
+                        <input
+                          value={managerTargetEventId}
+                          onChange={(e) => setManagerTargetEventId(e.target.value)}
+                          placeholder="Event UUID"
+                        />
+                      </div>
+                      <div>
+                        <label>Event Status</label>
+                        <select
+                          value={managerTargetEventStatus}
+                          onChange={(e) => setManagerTargetEventStatus(e.target.value)}
+                        >
+                          <option value="draft">draft</option>
+                          <option value="published">published</option>
+                          <option value="cancelled">cancelled</option>
+                          <option value="sold_out">sold_out</option>
+                          <option value="completed">completed</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="manager-actions manager-actions-split">
+                      <button className="btn btn-outline" onClick={handleUpdateEventStatus} disabled={managerLoading}>
+                        Update Event Status
+                      </button>
+                      <button className="btn btn-outline" onClick={handleDeleteEvent} disabled={managerLoading}>
+                        Delete Event
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="manager-section">
+                    <h3>Ticket Batch</h3>
+                    <div className="manager-grid">
+                      <div>
+                        <label>Ticket Batch Event ID</label>
+                        <input
+                          value={managerBatchEventId}
+                          onChange={(e) => setManagerBatchEventId(e.target.value)}
+                          placeholder="Event UUID"
+                        />
+                      </div>
+                      <div>
+                        <label>Category</label>
+                        <input
+                          value={managerBatchCategory}
+                          onChange={(e) => setManagerBatchCategory(e.target.value)}
+                          placeholder="General / VIP"
+                        />
+                      </div>
+                    </div>
+                    <div className="manager-grid">
+                      <div>
+                        <label>Price (EUR)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={managerBatchPrice}
+                          onChange={(e) => setManagerBatchPrice(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label>Quantity</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="50000"
+                          value={managerBatchQuantity}
+                          onChange={(e) => setManagerBatchQuantity(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="manager-actions">
+                      <button className="btn" onClick={handleCreateTicketBatch} disabled={managerLoading}>
+                        Create Ticket Batch
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="manager-section">
+                    <h3>Ticket Lifecycle</h3>
+                    <label>Ticket ID</label>
+                    <input
+                      value={managerTicketId}
+                      onChange={(e) => setManagerTicketId(e.target.value)}
+                      placeholder="Ticket UUID"
+                    />
+                    <div className="manager-actions manager-actions-quad">
+                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('reserve')} disabled={managerLoading}>
+                        Reserve
+                      </button>
+                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('sell')} disabled={managerLoading}>
+                        Sell
+                      </button>
+                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('use')} disabled={managerLoading}>
+                        Use
+                      </button>
+                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('cancel')} disabled={managerLoading}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+
+                  {managerError && <p className="error-msg">{managerError}</p>}
+                </article>
+              )}
 
               <article className="panel-card reveal">
                 <h2>Reservations</h2>

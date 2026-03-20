@@ -32,7 +32,7 @@ BROWSER_HANDOFF_TTL_SECONDS = max(30, int(os.getenv("BROWSER_HANDOFF_TTL_SECONDS
 EVENT_MUTATIONS_REQUIRE_ADMIN = os.getenv("EVENT_MUTATIONS_REQUIRE_ADMIN", "false").lower() in {"1", "true", "yes"}
 EVENT_ADMIN_ROLES = {
     role.strip().lower()
-    for role in os.getenv("EVENT_ADMIN_ROLES", "admin").split(",")
+    for role in os.getenv("EVENT_ADMIN_ROLES", "admin,promoter").split(",")
     if role.strip()
 }
 TRACE_HEADER_NAMES = ("X-Request-ID", "X-Correlation-ID")
@@ -231,7 +231,7 @@ async def _ensure_event_admin_if_required(authorization: str | None, request: Re
     claims = await _verify_user_token(token, request)
     role = str(claims.get("role") or "").lower()
     if role not in EVENT_ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Apenas admins podem alterar eventos")
+        raise HTTPException(status_code=403, detail="Apenas utilizadores autorizados podem alterar eventos")
     return claims
 
 
@@ -620,6 +620,70 @@ async def ticket_availability(ticket_id: str, request: Request):
                         headers=_inv_headers(request=request),
                         service_label="Inventory Service",
                         request=request)
+
+
+@app.get("/api/tickets/{ticket_id}", summary="Detalhes do bilhete", tags=["Tickets"])
+async def get_ticket(ticket_id: str, request: Request):
+    """Proxy direto para GET /api/v1/tickets/{ticket_id}."""
+    return await proxy(
+        "GET",
+        f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket_id}",
+        headers=_inv_headers(request=request),
+        service_label="Inventory Service",
+        request=request,
+    )
+
+
+@app.put("/api/tickets/{ticket_id}/reserve", summary="Reservar bilhete", tags=["Tickets"])
+async def reserve_ticket(ticket_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    """Reserva direta de bilhete no Inventory; operação protegida por role quando política está ativa."""
+    claims = await _ensure_event_admin_if_required(authorization, request)
+    return await proxy(
+        "PUT",
+        f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket_id}/reserve",
+        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+        service_label="Inventory Service",
+        request=request,
+    )
+
+
+@app.put("/api/tickets/{ticket_id}/sell", summary="Confirmar venda do bilhete", tags=["Tickets"])
+async def sell_ticket(ticket_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    """Confirma venda de bilhete; operação protegida por role quando política está ativa."""
+    claims = await _ensure_event_admin_if_required(authorization, request)
+    return await proxy(
+        "PUT",
+        f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket_id}/sell",
+        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+        service_label="Inventory Service",
+        request=request,
+    )
+
+
+@app.put("/api/tickets/{ticket_id}/use", summary="Validar utilização do bilhete", tags=["Tickets"])
+async def use_ticket(ticket_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    """Marca bilhete como usado; operação protegida por role quando política está ativa."""
+    claims = await _ensure_event_admin_if_required(authorization, request)
+    return await proxy(
+        "PUT",
+        f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket_id}/use",
+        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+        service_label="Inventory Service",
+        request=request,
+    )
+
+
+@app.delete("/api/tickets/{ticket_id}", summary="Cancelar bilhete reservado", tags=["Tickets"])
+async def cancel_ticket(ticket_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    """Cancela reserva de bilhete; operação protegida por role quando política está ativa."""
+    claims = await _ensure_event_admin_if_required(authorization, request)
+    return await proxy(
+        "DELETE",
+        f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket_id}",
+        headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
+        service_label="Inventory Service",
+        request=request,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -56,7 +56,12 @@ Service     Service     Service
 |--------|------|-----------|
 | POST | `/api/events/{id}/tickets` | Criar bilhetes (batch) |
 | GET | `/api/events/{id}/tickets` | Listar bilhetes de um evento |
+| GET | `/api/tickets/{id}` | Detalhes de um bilhete |
 | GET | `/api/tickets/{id}/availability` | Ver disponibilidade |
+| PUT | `/api/tickets/{id}/reserve` | Reservar bilhete |
+| PUT | `/api/tickets/{id}/sell` | Confirmar venda de bilhete (operação privilegiada) |
+| PUT | `/api/tickets/{id}/use` | Validar entrada de bilhete (operação privilegiada) |
+| DELETE | `/api/tickets/{id}` | Cancelar bilhete reservado (operação privilegiada) |
 
 ### Reservations (`/api/reservations`)
 
@@ -174,8 +179,8 @@ uvicorn main:app --reload --port 8080
 | `PAYMENT_API_KEY` | `your-secret-api-key` | API Key para o Payment |
 | `PAYMENT_ADMIN_API_KEY` | `admin-dev-key-2024` | Admin key bootstrap do Payment Service |
 | `INTERNAL_SERVICE_KEY` | `internal-dev-key-2024` | Chave interna para chamadas service-to-service ao Auth `/verify` |
-| `EVENT_MUTATIONS_REQUIRE_ADMIN` | `false` | Se `true`, criar/editar/apagar eventos e criar tickets exige utilizador com role admin |
-| `EVENT_ADMIN_ROLES` | `admin` | Lista de roles permitidas para mutações de eventos (separadas por vírgula) |
+| `EVENT_MUTATIONS_REQUIRE_ADMIN` | `true` | Se `true`, criar/editar/apagar eventos e criar tickets exige utilizador com role autorizada |
+| `EVENT_ADMIN_ROLES` | `admin,promoter` | Lista de roles permitidas para mutações de eventos (separadas por vírgula) |
 
 > **Nota:** O Payment já não faz auth própria. O backend dele valida Bearer tokens com o Auth Service via `/api/v1/auth/verify`, por isso as duas configs críticas aí são `AUTH_SERVICE_URL` e `INTERNAL_SERVICE_KEY`.
 
