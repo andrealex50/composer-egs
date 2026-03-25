@@ -17,47 +17,26 @@ const AUTH_EXCHANGE_PROMISE_KEY = '__flashsaleAuthExchangePromise';
 
 const buildAuthUiUrl = (path, query = {}) => {
   const url = new URL(path, AUTH_UI_BASE_URL);
-  Object.entries(query).forEach(([key, value]) => {
-    if (value) {
-      url.searchParams.set(key, value);
-    }
-  });
+  Object.entries(query).forEach(([key, value]) => { if (value) url.searchParams.set(key, value); });
   return url.toString();
 };
-
 const buildPaymentUiUrl = (path) => new URL(path, PAYMENT_UI_BASE_URL).toString();
-
 const buildApiUrl = (path) => new URL(path, API_BASE_URL || window.location.origin).toString();
-
-const createAuthState = () => {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-};
+const createAuthState = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const getPendingAuthStates = () => {
   const raw = localStorage.getItem(AUTH_STATE_STORAGE_KEY);
   if (!raw) return [];
-
   try {
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => String(item || '').trim()).filter(Boolean);
-    }
-  } catch (_error) {
-    // Legacy format used a single raw state string.
-  }
-
+    if (Array.isArray(parsed)) return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+  } catch (_) {}
   const legacy = String(raw).trim();
   return legacy ? [legacy] : [];
 };
 
 const savePendingAuthStates = (states) => {
-  if (!states.length) {
-    localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
-    return;
-  }
+  if (!states.length) { localStorage.removeItem(AUTH_STATE_STORAGE_KEY); return; }
   localStorage.setItem(AUTH_STATE_STORAGE_KEY, JSON.stringify(states));
 };
 
@@ -65,33 +44,25 @@ const addPendingAuthState = (state) => {
   const normalized = String(state || '').trim();
   if (!normalized) return;
   const current = getPendingAuthStates();
-  const next = [...current.filter((item) => item !== normalized), normalized].slice(-10);
-  savePendingAuthStates(next);
+  savePendingAuthStates([...current.filter((item) => item !== normalized), normalized].slice(-10));
 };
 
 const hasPendingAuthState = (state) => {
   const normalized = String(state || '').trim();
-  if (!normalized) return false;
-  return getPendingAuthStates().includes(normalized);
+  return normalized ? getPendingAuthStates().includes(normalized) : false;
 };
 
 const consumePendingAuthState = (state) => {
   const normalized = String(state || '').trim();
   if (!normalized) return;
-  const remaining = getPendingAuthStates().filter((item) => item !== normalized);
-  savePendingAuthStates(remaining);
+  savePendingAuthStates(getPendingAuthStates().filter((item) => item !== normalized));
 };
 
-const clearPendingAuthStates = () => {
-  localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
-};
+const clearPendingAuthStates = () => localStorage.removeItem(AUTH_STATE_STORAGE_KEY);
 
 const getOrCreateAuthExchangePromise = (code, state) => {
   const existing = window[AUTH_EXCHANGE_PROMISE_KEY];
-  if (existing?.code === code && existing?.state === state && existing?.promise) {
-    return existing.promise;
-  }
-
+  if (existing?.code === code && existing?.state === state && existing?.promise) return existing.promise;
   const promise = axios.post(`${API_BASE_URL}/api/auth/browser/exchange`, { code, state });
   window[AUTH_EXCHANGE_PROMISE_KEY] = { code, state, promise };
   return promise;
@@ -101,19 +72,42 @@ const extractErrorMessage = (error, fallback = 'Request failed') => {
   const detail = error?.response?.data?.detail;
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail)) return detail.map((item) => item?.msg || JSON.stringify(item)).join('; ');
-  if (detail && typeof detail === 'object') {
-    return detail.detail || detail.message || JSON.stringify(detail);
-  }
+  if (detail && typeof detail === 'object') return detail.detail || detail.message || JSON.stringify(detail);
   return error?.message || fallback;
 };
 
 const extractErrorDetailObject = (error) => {
   const detail = error?.response?.data?.detail;
-  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
-    return detail;
-  }
-  return null;
+  return (detail && typeof detail === 'object' && !Array.isArray(detail)) ? detail : null;
 };
+
+// ─── Event banner gradient palette ─────────────────────────────────────────
+const BANNER_GRADIENTS = [
+  'linear-gradient(135deg, #0a2040 0%, #0d3b2a 100%)',
+  'linear-gradient(135deg, #1a0a30 0%, #0a1f40 100%)',
+  'linear-gradient(135deg, #0f2a1a 0%, #0a2030 100%)',
+  'linear-gradient(135deg, #200a0a 0%, #0a1530 100%)',
+  'linear-gradient(135deg, #101a30 0%, #0a2820 100%)',
+  'linear-gradient(135deg, #1a1000 0%, #0a2020 100%)',
+];
+
+const getBannerGradient = (seed) => {
+  const idx = seed ? seed.charCodeAt(0) % BANNER_GRADIENTS.length : 0;
+  return BANNER_GRADIENTS[idx];
+};
+
+// ─── Icons ──────────────────────────────────────────────────────────────────
+const IconPin = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M8 1a4 4 0 1 0 0 8A4 4 0 0 0 8 1zM6 5a2 2 0 1 1 4 0 2 2 0 0 1-4 0zm2 4.5c-3 0-5 1.3-5 2.5v.5h10v-.5c0-1.2-2-2.5-5-2.5z"/>
+  </svg>
+);
+
+const IconCal = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1H14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1.5V.5a.5.5 0 0 1 .5-.5zM1 6v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6H1z"/>
+  </svg>
+);
 
 function App() {
   const [events, setEvents] = useState([]);
@@ -126,7 +120,7 @@ function App() {
   const [flowInfo, setFlowInfo] = useState('');
   const [walletActionUrl, setWalletActionUrl] = useState('');
   const [eventsError, setEventsError] = useState('');
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState('orders');
   const [toast, setToast] = useState(null);
   const [checkoutLoadingEventId, setCheckoutLoadingEventId] = useState('');
   const [quantityByEvent, setQuantityByEvent] = useState({});
@@ -150,6 +144,7 @@ function App() {
   const [refundTicketIds, setRefundTicketIds] = useState('');
   const [refundResult, setRefundResult] = useState(null);
   const [refundError, setRefundError] = useState('');
+
   const [managerEventName, setManagerEventName] = useState('');
   const [managerEventDate, setManagerEventDate] = useState('');
   const [managerEventVenue, setManagerEventVenue] = useState('');
@@ -166,9 +161,7 @@ function App() {
 
   const isPrivilegedUser = ['admin', 'promoter'].includes(String(user?.role || '').toLowerCase());
 
-  useEffect(() => {
-    fetchEvents();
-  }, []);
+  useEffect(() => { fetchEvents(); }, []);
 
   useEffect(() => {
     localStorage.setItem('flashsale_token', token || '');
@@ -188,44 +181,36 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('auth_callback') !== '1') return;
-
     const code = params.get('code');
     const state = params.get('state');
     const cleanUrl = `${window.location.origin}${window.location.pathname}`;
-    const hasMatchingState = hasPendingAuthState(state);
-
-    if (!code || !state || !hasMatchingState) {
+    if (!code || !state || !hasPendingAuthState(state)) {
       setAuthError('Secure login callback failed: invalid or missing state.');
       window.history.replaceState({}, document.title, cleanUrl);
       return;
     }
-
     let cancelled = false;
-
     const completeHandoff = async () => {
       setAuthRedirectLoading(true);
       setFlowInfo('Finalizing secure sign-in...');
       setAuthError('');
-
       try {
         const res = await getOrCreateAuthExchangePromise(code, state);
         if (cancelled) return;
-
         if (res.data?.refresh_token) {
           localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, res.data.refresh_token);
         } else {
           localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
         }
-
         consumePendingAuthState(state);
         setUser(res.data?.user || null);
         setToken(res.data?.access_token || '');
-        setToast({ type: 'success', text: 'Signed in via Auth UI.' });
+        setToast({ type: 'success', text: 'Welcome back! You are signed in.' });
       } catch (error) {
         if (cancelled) return;
         consumePendingAuthState(state);
         localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-        setAuthError('Secure login callback failed: ' + extractErrorMessage(error, 'Could not finish sign-in.'));
+        setAuthError('Sign-in failed: ' + extractErrorMessage(error, 'Could not finish sign-in.'));
       } finally {
         if (cancelled) return;
         setAuthRedirectLoading(false);
@@ -233,12 +218,8 @@ function App() {
         window.history.replaceState({}, document.title, cleanUrl);
       }
     };
-
     completeHandoff();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -250,43 +231,30 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const status = params.get('status');
-
     if (!status) return;
-
     if (status === 'success') {
-      setFlowInfo('Checkout completed. Refreshing your payments history.');
-      setToast({ type: 'success', text: 'Payment completed successfully.' });
+      setFlowInfo('');
+      setToast({ type: 'success', text: 'Payment completed! Check your orders.' });
       if (token) fetchPayments(token);
     } else if (status === 'cancel') {
-      setFlowInfo('Checkout was canceled.');
-      setToast({ type: 'warning', text: 'Checkout canceled. No payment was captured.' });
+      setToast({ type: 'warning', text: 'Checkout cancelled. No payment was taken.' });
     }
-
-    const cleanUrl = `${window.location.origin}${window.location.pathname}`;
-    window.history.replaceState({}, document.title, cleanUrl);
+    window.history.replaceState({}, document.title, `${window.location.origin}${window.location.pathname}`);
   }, [token]);
 
   const fetchEvents = () => {
     setLoadingEvents(true);
     setEventsError('');
     axios.get(`${API_BASE_URL}/api/events`)
-      .then((res) => {
-        setEvents(res.data?.data || []);
-        setLoadingEvents(false);
-      })
-      .catch((err) => {
-        console.error('Error fetching events:', err);
-        setEventsError('Could not load events: ' + extractErrorMessage(err, 'Could not load events'));
-        setLoadingEvents(false);
-      });
+      .then((res) => { setEvents(res.data?.data || []); setLoadingEvents(false); })
+      .catch((err) => { setEventsError(extractErrorMessage(err, 'Could not load events')); setLoadingEvents(false); });
   };
 
   const fetchProfile = async (activeToken) => {
     setProfileLoading(true);
     setProfileError('');
     try {
-      const config = { headers: { Authorization: `Bearer ${activeToken}` } };
-      const res = await axios.get(`${API_BASE_URL}/api/auth/me`, config);
+      const res = await axios.get(`${API_BASE_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${activeToken}` } });
       setUser(res.data || null);
     } catch (error) {
       setUser(null);
@@ -294,7 +262,7 @@ function App() {
       if (statusCode === 401 || statusCode === 403) {
         localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
         setToken(null);
-        setAuthError('Session expired. Please login again.');
+        setAuthError('Session expired. Please sign in again.');
       }
       setProfileError(extractErrorMessage(error, 'Could not load profile'));
     } finally {
@@ -304,16 +272,9 @@ function App() {
 
   const handleLogout = async () => {
     try {
-      if (token) {
-        await axios.post(
-          `${API_BASE_URL}/api/auth/logout`,
-          {},
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-      }
-    } catch (_error) {
-      // Ignore logout errors and clear local state anyway.
-    } finally {
+      if (token) await axios.post(`${API_BASE_URL}/api/auth/logout`, {}, { headers: { Authorization: `Bearer ${token}` } });
+    } catch (_) {}
+    finally {
       localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
       clearPendingAuthStates();
       setToken(null);
@@ -325,8 +286,8 @@ function App() {
       setReservationStatusResult(null);
       setRefundResult(null);
       setRefundError('');
-      setActiveTab('overview');
-      setToast({ type: 'info', text: 'Session closed.' });
+      setActiveTab('orders');
+      setToast({ type: 'info', text: 'Signed out successfully.' });
     }
   };
 
@@ -335,12 +296,10 @@ function App() {
     setPaymentsLoading(true);
     setPaymentsError('');
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/payments`, {
-        headers: { Authorization: `Bearer ${activeToken}` },
-      });
+      const res = await axios.get(`${API_BASE_URL}/api/payments`, { headers: { Authorization: `Bearer ${activeToken}` } });
       setPayments(res.data?.items || []);
     } catch (error) {
-      setPaymentsError('Could not load payments: ' + extractErrorMessage(error, 'Could not load payments'));
+      setPaymentsError(extractErrorMessage(error, 'Could not load orders'));
     } finally {
       setPaymentsLoading(false);
     }
@@ -351,9 +310,7 @@ function App() {
     setPaymentAccountLoading(true);
     setPaymentAccountError('');
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/payment-account`, {
-        headers: { Authorization: `Bearer ${activeToken}` },
-      });
+      const res = await axios.get(`${API_BASE_URL}/api/payment-account`, { headers: { Authorization: `Bearer ${activeToken}` } });
       setPaymentAccount(res.data || null);
       if (res.data?.exists) {
         setWalletActionUrl(buildPaymentUiUrl(PAYMENT_UI_DASHBOARD_PATH));
@@ -362,77 +319,40 @@ function App() {
       }
     } catch (error) {
       setPaymentAccount(null);
-      setPaymentAccountError(extractErrorMessage(error, 'Could not load payment account status'));
+      setPaymentAccountError(extractErrorMessage(error, 'Could not load wallet status'));
     } finally {
       setPaymentAccountLoading(false);
     }
   };
 
   const setupPaymentAccount = async () => {
-    if (!token) {
-      setAuthError('Please sign in before creating a Payment account.');
-      return;
-    }
-
+    if (!token) { setAuthError('Please sign in before setting up a wallet.'); return; }
     const registerUrl = buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH);
     setWalletActionUrl(registerUrl);
-    setFlowInfo('Redirecting to Payment register page...');
+    setFlowInfo('Redirecting to wallet setup...');
     window.location.href = registerUrl;
   };
 
-  const reserveTickets = async () => {
-    if (!reservationEventId) {
-      setAuthError('Select an event to reserve tickets.');
-      return;
-    }
+  const reserveTickets = async (eventId, qty) => {
+    if (!eventId) return;
     try {
-      const res = await axios.post(`${API_BASE_URL}/api/reservations`, {
-        event_id: reservationEventId,
-        quantity: Number(reservationQty) || 1,
-      });
+      const res = await axios.post(`${API_BASE_URL}/api/reservations`, { event_id: eventId, quantity: Number(qty) || 1 });
       setReservationResult(res.data);
       setReservationStatusTicketId(res.data?.tickets?.[0]?.id || '');
-      setAuthError('');
-      setToast({ type: 'success', text: `Reserved ${res.data?.tickets?.length || 0} ticket(s).` });
+      setToast({ type: 'success', text: `Reserved ${res.data?.tickets?.length || 0} ticket(s) — complete payment via Buy Now.` });
     } catch (error) {
-      setAuthError('Reservation failed: ' + extractErrorMessage(error, 'Could not reserve tickets'));
-    }
-  };
-
-  const checkReservationStatus = async () => {
-    if (!reservationStatusTicketId) return;
-    try {
-      const res = await axios.get(`${API_BASE_URL}/api/reservations/${reservationStatusTicketId}`);
-      setReservationStatusResult(res.data);
-      setToast({ type: 'info', text: `Reservation status: ${res.data?.status || 'unknown'}.` });
-    } catch (error) {
-      setAuthError('Reservation status failed: ' + extractErrorMessage(error, 'Could not load reservation status'));
+      setToast({ type: 'error', text: 'Reservation failed: ' + extractErrorMessage(error) });
     }
   };
 
   const handleRefund = async () => {
-    if (!token) {
-      setRefundError('Login required to request refund.');
-      return;
-    }
-    if (!refundPaymentId.trim()) {
-      setRefundError('Payment ID is required.');
-      return;
-    }
-
-    const ticketIds = refundTicketIds
-      .split(',')
-      .map((x) => x.trim())
-      .filter(Boolean);
-
+    if (!token) { setRefundError('Sign in to request a refund.'); return; }
+    if (!refundPaymentId.trim()) { setRefundError('Please select an order to refund.'); return; }
+    const ticketIds = refundTicketIds.split(',').map((x) => x.trim()).filter(Boolean);
     try {
       const res = await axios.post(
         `${API_BASE_URL}/api/refund`,
-        {
-          payment_id: refundPaymentId.trim(),
-          ticket_ids: ticketIds,
-          reason: 'requested_by_customer',
-        },
+        { payment_id: refundPaymentId.trim(), ticket_ids: ticketIds, reason: 'requested_by_customer' },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setRefundResult(res.data);
@@ -446,160 +366,96 @@ function App() {
   };
 
   const ensurePrivilegedAccess = () => {
-    if (!token) {
-      setManagerError('Login required.');
-      return false;
-    }
-    if (!isPrivilegedUser) {
-      setManagerError('This action is restricted to promoter/admin users.');
-      return false;
-    }
+    if (!token) { setManagerError('Sign in required.'); return false; }
+    if (!isPrivilegedUser) { setManagerError('Restricted to promoter / admin accounts.'); return false; }
     return true;
   };
 
   const handleCreateEvent = async () => {
     if (!ensurePrivilegedAccess()) return;
-    if (!managerEventName.trim() || !managerEventDate) {
-      setManagerError('Event name and date are required.');
-      return;
-    }
-
-    setManagerLoading(true);
-    setManagerError('');
+    if (!managerEventName.trim() || !managerEventDate) { setManagerError('Event name and date are required.'); return; }
+    setManagerLoading(true); setManagerError('');
     try {
-      const payload = {
+      const res = await axios.post(`${API_BASE_URL}/api/events`, {
         name: managerEventName.trim(),
         description: managerEventDescription.trim() || null,
         venue: managerEventVenue.trim() || null,
         date: new Date(managerEventDate).toISOString(),
-      };
-      const res = await axios.post(`${API_BASE_URL}/api/events`, payload, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const createdId = res.data?.id || '';
-      setManagerTargetEventId(createdId);
-      setManagerBatchEventId(createdId);
-      setToast({ type: 'success', text: `Event created${createdId ? `: ${createdId}` : ''}.` });
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      const id = res.data?.id || '';
+      setManagerTargetEventId(id);
+      setManagerBatchEventId(id);
+      setToast({ type: 'success', text: `Event created${id ? `: ${id.slice(0, 8)}…` : ''}.` });
       fetchEvents();
     } catch (error) {
-      setManagerError('Create event failed: ' + extractErrorMessage(error, 'Could not create event'));
-    } finally {
-      setManagerLoading(false);
-    }
+      setManagerError('Create event failed: ' + extractErrorMessage(error));
+    } finally { setManagerLoading(false); }
   };
 
   const handleUpdateEventStatus = async () => {
     if (!ensurePrivilegedAccess()) return;
-    if (!managerTargetEventId.trim()) {
-      setManagerError('Event ID is required.');
-      return;
-    }
-
-    setManagerLoading(true);
-    setManagerError('');
+    if (!managerTargetEventId.trim()) { setManagerError('Event ID is required.'); return; }
+    setManagerLoading(true); setManagerError('');
     try {
-      await axios.put(
-        `${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`,
-        { status: managerTargetEventStatus },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      setToast({ type: 'success', text: `Event status updated to ${managerTargetEventStatus}.` });
+      await axios.put(`${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`, { status: managerTargetEventStatus }, { headers: { Authorization: `Bearer ${token}` } });
+      setToast({ type: 'success', text: `Status updated to ${managerTargetEventStatus}.` });
       fetchEvents();
     } catch (error) {
-      setManagerError('Update event failed: ' + extractErrorMessage(error, 'Could not update event'));
-    } finally {
-      setManagerLoading(false);
-    }
+      setManagerError('Update failed: ' + extractErrorMessage(error));
+    } finally { setManagerLoading(false); }
   };
 
   const handleDeleteEvent = async () => {
     if (!ensurePrivilegedAccess()) return;
-    if (!managerTargetEventId.trim()) {
-      setManagerError('Event ID is required.');
-      return;
-    }
-
-    setManagerLoading(true);
-    setManagerError('');
+    if (!managerTargetEventId.trim()) { setManagerError('Event ID is required.'); return; }
+    setManagerLoading(true); setManagerError('');
     try {
-      await axios.delete(`${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await axios.delete(`${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`, { headers: { Authorization: `Bearer ${token}` } });
       setToast({ type: 'success', text: 'Event deleted.' });
       fetchEvents();
     } catch (error) {
-      setManagerError('Delete event failed: ' + extractErrorMessage(error, 'Could not delete event'));
-    } finally {
-      setManagerLoading(false);
-    }
+      setManagerError('Delete failed: ' + extractErrorMessage(error));
+    } finally { setManagerLoading(false); }
   };
 
   const handleCreateTicketBatch = async () => {
     if (!ensurePrivilegedAccess()) return;
-    if (!managerBatchEventId.trim()) {
-      setManagerError('Event ID is required for ticket batch.');
-      return;
-    }
-
-    setManagerLoading(true);
-    setManagerError('');
+    if (!managerBatchEventId.trim()) { setManagerError('Event ID is required for ticket batch.'); return; }
+    setManagerLoading(true); setManagerError('');
     try {
-      await axios.post(
-        `${API_BASE_URL}/api/events/${managerBatchEventId.trim()}/tickets`,
-        {
-          category: managerBatchCategory.trim() || 'General',
-          price: Number(managerBatchPrice || 0),
-          currency: 'EUR',
-          quantity: Number(managerBatchQuantity || 1),
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await axios.post(`${API_BASE_URL}/api/events/${managerBatchEventId.trim()}/tickets`, {
+        category: managerBatchCategory.trim() || 'General',
+        price: Number(managerBatchPrice || 0),
+        currency: 'EUR',
+        quantity: Number(managerBatchQuantity || 1),
+      }, { headers: { Authorization: `Bearer ${token}` } });
       setToast({ type: 'success', text: 'Ticket batch created.' });
     } catch (error) {
-      setManagerError('Create tickets failed: ' + extractErrorMessage(error, 'Could not create ticket batch'));
-    } finally {
-      setManagerLoading(false);
-    }
+      setManagerError('Create tickets failed: ' + extractErrorMessage(error));
+    } finally { setManagerLoading(false); }
   };
 
   const handleTicketLifecycleAction = async (action) => {
     if (!ensurePrivilegedAccess()) return;
-    if (!managerTicketId.trim()) {
-      setManagerError('Ticket ID is required.');
-      return;
-    }
-
-    setManagerLoading(true);
-    setManagerError('');
+    if (!managerTicketId.trim()) { setManagerError('Ticket ID is required.'); return; }
+    setManagerLoading(true); setManagerError('');
     try {
       const baseUrl = `${API_BASE_URL}/api/tickets/${managerTicketId.trim()}`;
       const config = { headers: { Authorization: `Bearer ${token}` } };
-
-      if (action === 'cancel') {
-        await axios.delete(baseUrl, config);
-      } else {
-        await axios.put(`${baseUrl}/${action}`, {}, config);
-      }
-
-      setToast({ type: 'success', text: `Ticket action executed: ${action}.` });
+      if (action === 'cancel') await axios.delete(baseUrl, config);
+      else await axios.put(`${baseUrl}/${action}`, {}, config);
+      setToast({ type: 'success', text: `Ticket action: ${action}.` });
     } catch (error) {
-      setManagerError(`Ticket ${action} failed: ` + extractErrorMessage(error, 'Operation failed'));
-    } finally {
-      setManagerLoading(false);
-    }
+      setManagerError(`Ticket ${action} failed: ` + extractErrorMessage(error));
+    } finally { setManagerLoading(false); }
   };
 
   const handleCheckout = async (eventId) => {
-    if (!token) {
-      setAuthError('Please sign in before checkout.');
-      return;
-    }
-
+    if (!token) { setAuthError('Please sign in to buy tickets.'); return; }
     const quantity = Number(quantityByEvent[eventId] || 1);
     setCheckoutLoadingEventId(eventId);
-    setFlowInfo('Redirecting to hosted checkout...');
+    setFlowInfo('Redirecting to checkout...');
     setWalletActionUrl('');
-
     try {
       const payload = {
         event_id: eventId,
@@ -608,11 +464,8 @@ function App() {
         cancel_url: window.location.href.split('?')[0] + '?status=cancel',
         amount_cents: quantity * 1500,
       };
-
-      const config = { headers: { Authorization: `Bearer ${token}` } };
-      const res = await axios.post(`${API_BASE_URL}/api/checkout`, payload, config);
-
-      if (res.data && res.data.checkout_url) {
+      const res = await axios.post(`${API_BASE_URL}/api/checkout`, payload, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.data?.checkout_url) {
         window.location.href = res.data.checkout_url;
       } else {
         setToast({ type: 'warning', text: 'Checkout started, but no redirect URL was returned.' });
@@ -620,34 +473,33 @@ function App() {
     } catch (error) {
       const detailObject = extractErrorDetailObject(error);
       if (detailObject?.code === 'wallet_setup_required') {
-        const guidance = detailObject?.message || 'Wallet setup is required before checkout.';
+        const guidance = detailObject?.message || 'Wallet setup required before checkout.';
         setFlowInfo(guidance);
-        setWalletActionUrl(
-          detailObject?.wallet_register_url
-          || detailObject?.action_url
-          || buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH)
-        );
+        setWalletActionUrl(detailObject?.wallet_register_url || detailObject?.action_url || buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH));
         setPaymentAccount({ exists: false, customer: null, identity_email: user?.email || '' });
         setToast({ type: 'warning', text: guidance });
       } else {
-        setToast({ type: 'error', text: 'Checkout error: ' + extractErrorMessage(error, 'Could not start checkout') });
+        setToast({ type: 'error', text: 'Checkout error: ' + extractErrorMessage(error) });
       }
     } finally {
       setCheckoutLoadingEventId('');
+      setFlowInfo('');
     }
   };
 
-  const setEventQuantity = (eventId, value) => {
-    const parsed = Math.max(1, Math.min(10, Number(value) || 1));
-    setQuantityByEvent((prev) => ({ ...prev, [eventId]: parsed }));
+  const stepQty = (eventId, delta) => {
+    setQuantityByEvent((prev) => {
+      const current = Number(prev[eventId] || 1);
+      const next = Math.max(1, Math.min(10, current + delta));
+      return { ...prev, [eventId]: next };
+    });
   };
 
   const startAuthUiFlow = (path) => {
     const state = createAuthState();
     addPendingAuthState(state);
     setAuthError('');
-    setFlowInfo('Redirecting to the Auth UI...');
-
+    setFlowInfo('Redirecting to sign in...');
     const authUrl = buildAuthUiUrl(path, {
       handoff_url: buildApiUrl('/api/auth/browser/handoff'),
       return_to: `${window.location.origin}${window.location.pathname}`,
@@ -656,27 +508,16 @@ function App() {
     window.location.href = authUrl;
   };
 
-  const usePaymentInRefund = (paymentId) => {
+  const triggerRefund = (paymentId) => {
     setRefundPaymentId(paymentId);
-    setActiveTab('refund');
-  };
-
-  const useEventInReservation = (eventId) => {
-    setReservationEventId(eventId);
-    setActiveTab('overview');
+    setActiveTab('refunds');
   };
 
   const statusClass = (statusValue) => {
     const status = String(statusValue || '').toLowerCase();
-    if (status.includes('success') || status.includes('succeeded') || status.includes('paid') || status.includes('complete')) {
-      return 'badge badge-success';
-    }
-    if (status.includes('pending') || status.includes('open') || status.includes('processing')) {
-      return 'badge badge-warning';
-    }
-    if (status.includes('fail') || status.includes('cancel') || status.includes('refund')) {
-      return 'badge badge-danger';
-    }
+    if (status.includes('success') || status.includes('succeeded') || status.includes('paid') || status.includes('complete')) return 'badge badge-success';
+    if (status.includes('pending') || status.includes('open') || status.includes('processing')) return 'badge badge-warning';
+    if (status.includes('fail') || status.includes('cancel') || status.includes('refund')) return 'badge badge-danger';
     return 'badge badge-neutral';
   };
 
@@ -684,472 +525,471 @@ function App() {
     if (!value) return 'Date TBD';
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return value;
-    return d.toLocaleString();
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
   const paymentItems = payments || [];
-  const featuredEvents = events.slice(0, 6);
-  const firstName = (user?.full_name || user?.email || 'Guest').split(' ')[0];
+  const firstName = (user?.full_name || user?.email || '').split(/[\s@]/)[0] || 'there';
+  const initials = firstName.slice(0, 2).toUpperCase();
 
   return (
-    <div className="app-shell">
-      <div className="bg-orb orb-a" />
-      <div className="bg-orb orb-b" />
-
-      <header className="hero">
-        <div className="hero-tag">FlashSale</div>
-        <h1>Your next event starts here.</h1>
-        <p className="hero-subtitle">Discover events, buy in seconds, and track everything in one seamless experience.</p>
-
-        <div className="hero-steps">
-          <span>Sign in</span>
-          <span>Pick an event</span>
-          <span>Checkout</span>
-          <span>Track your order</span>
+    <>
+      {/* ── NAV ─────────────────────────────────── */}
+      <nav className="nav">
+        <div className="nav-logo">
+          FlashSale <span className="nav-logo-dot" />
         </div>
-      </header>
-
-      {toast && (
-        <div className={`toast toast-${toast.type}`}>
-          {toast.text}
-        </div>
-      )}
-
-      {flowInfo && <div className="flow-note">{flowInfo}</div>}
-
-      <section className="auth-panel">
-        <div className="auth-status copy-block">
+        <div className="nav-right">
+          {authError && <span className="error-msg" style={{ fontSize: '0.82rem', maxWidth: 260 }}>{authError}</span>}
           {token ? (
             <>
-              <p>Welcome back, <strong>{firstName}</strong>.</p>
-              <p className="hint">Signed in as: {user?.email || 'N/A'}</p>
+              <div className="nav-user">
+                <div className="nav-avatar">{initials}</div>
+                <span>Hello, <strong>{firstName}</strong></span>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={handleLogout}>Sign out</button>
             </>
           ) : (
             <>
-              <p>Sign in to unlock checkout, wallet setup, and order history.</p>
-              <p className="hint">Authentication happens in Auth UI and returns securely to Composer.</p>
-            </>
-          )}
-        </div>
-
-        <div className="auth-buttons">
-          {token ? (
-            <button className="btn btn-outline" onClick={handleLogout}>Sign out</button>
-          ) : (
-            <>
-              <button className="btn btn-outline" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
-                Create account
-              </button>
-              <button className="btn btn-outline" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
+              <button className="btn btn-ghost btn-sm" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
                 Sign in
               </button>
-              <a className="btn btn-outline" href={buildAuthUiUrl(AUTH_UI_FORGOT_PATH)}>
-                Forgot password
-              </a>
+              <button className="btn btn-primary btn-sm" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
+                Get started
+              </button>
             </>
           )}
         </div>
-        {authError && <span className="error-msg">{authError}</span>}
-      </section>
+      </nav>
 
-      <section className="events-section">
-        <div className="section-head">
-          <h2>Featured Events</h2>
-          <button className="btn btn-outline" onClick={fetchEvents}>Refresh events</button>
-        </div>
+      {/* ── PAGE ────────────────────────────────── */}
+      <div className="page">
 
-        {!token && <div className="login-gate">You can browse events freely. Sign in when you are ready to buy.</div>}
+        {/* ── FLOW INFO ───────────────────────── */}
+        {flowInfo && <div className="flow-info" style={{ marginTop: '1rem' }}>{flowInfo}</div>}
 
-        {loadingEvents ? (
-          <div className="skeleton-grid">
-            {[1, 2, 3].map((i) => <div key={i} className="skeleton-card" />)}
+        {/* ── HERO ────────────────────────────── */}
+        <section className="hero">
+          <div className="hero-glow hero-glow-a" />
+          <div className="hero-glow hero-glow-b" />
+          <div className="hero-content">
+            <div className="hero-eyebrow">
+              <span />
+              Flash sales · Live events · Instant checkout
+            </div>
+            <h1>
+              {token ? (
+                <>Welcome back,<br /><em>{firstName}.</em></>
+              ) : (
+                <>Your next event<br />starts <em>here.</em></>
+              )}
+            </h1>
+            <p className="hero-sub">
+              {token
+                ? 'Browse upcoming events below and buy your tickets in seconds.'
+                : 'Discover events, grab tickets in a flash, and track everything in one place.'}
+            </p>
+            {!token && (
+              <div className="hero-cta">
+                <button className="btn btn-primary" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
+                  Create free account
+                </button>
+                <button className="btn btn-ghost" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
+                  Sign in
+                </button>
+                <a className="btn btn-ghost" href={buildAuthUiUrl(AUTH_UI_FORGOT_PATH)} style={{ fontSize: '0.85rem', minHeight: 40 }}>
+                  Forgot password
+                </a>
+              </div>
+            )}
+            {!token && (
+              <div className="hero-stats">
+                <div className="hero-stat"><strong>100+</strong><span>Events</span></div>
+                <div className="hero-stat"><strong>5 sec</strong><span>Checkout</span></div>
+                <div className="hero-stat"><strong>Safe</strong><span>Payments</span></div>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="events-grid">
-            {eventsError && <p className="error-msg wide">{eventsError}</p>}
-            {events.length === 0 && <p className="hint wide">No events available right now.</p>}
-            {featuredEvents.map((ev) => {
-              const qty = quantityByEvent[ev.id] || 1;
-              const buyingThis = checkoutLoadingEventId === ev.id;
-              return (
-                <article key={ev.id} className="event-card">
-                  <div className="event-header-row">
-                    <h3>{ev.name || 'Unnamed Event'}</h3>
-                    <span className="badge badge-neutral">{ev.status || 'draft'}</span>
-                  </div>
+        </section>
 
-                  <p className="event-description">{ev.description || 'No description provided.'}</p>
-
-                  <div className="event-meta">
-                    <span>{ev.venue || 'Venue TBD'}</span>
-                    <span>{formatDate(ev.date)}</span>
-                    <span className="event-price">From EUR 15.00</span>
-                  </div>
-
-                  <div className="event-action">
-                    <div className="qty-row">
-                      <label>Tickets</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        value={qty}
-                        onChange={(e) => setEventQuantity(ev.id, e.target.value)}
-                      />
-                    </div>
-
-                    <div className="event-buttons">
-                      <button
-                        className="btn btn-outline"
-                        onClick={() => useEventInReservation(ev.id)}
-                      >
-                        Save for later
-                      </button>
-
-                      <button
-                        className="btn"
-                        onClick={() => handleCheckout(ev.id)}
-                        disabled={!token || buyingThis}
-                      >
-                        {buyingThis ? 'Redirecting...' : token ? 'Buy now' : 'Sign in to buy'}
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
+        {/* ── WALLET CTA (if setup required) ─── */}
+        {walletActionUrl && (
+          <div className="flow-info" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.5rem' }}>
+            <span>You need to set up a payment wallet before checking out.</span>
+            <a className="btn btn-primary btn-sm" href={walletActionUrl}>Set up wallet →</a>
           </div>
         )}
-      </section>
 
-      {token && (
-        <section className="workspace">
-          <div className="workspace-tabs">
-            <button
-              className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-              onClick={() => setActiveTab('overview')}
-            >
-              Home
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'payments' ? 'active' : ''}`}
-              onClick={() => setActiveTab('payments')}
-            >
-              Orders
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'refund' ? 'active' : ''}`}
-              onClick={() => setActiveTab('refund')}
-            >
-              Refunds
-            </button>
+        {/* ── EVENTS ──────────────────────────── */}
+        <section className="events-section">
+          <div className="section-header">
+            <div>
+              <h2>Upcoming Events</h2>
+              <p>{events.length > 0 ? `${events.length} events available` : 'Browse our upcoming lineup'}</p>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={fetchEvents}>↻ Refresh</button>
           </div>
 
-          {activeTab === 'overview' && (
-            <div className="panel-grid">
-              <article className="panel-card reveal">
-                <h2>Account and Wallet</h2>
-                <p><strong>Email:</strong> {profileLoading ? 'Loading...' : (user?.email || 'N/A')}</p>
-                <p><strong>Name:</strong> {profileLoading ? 'Loading...' : (user?.full_name || 'N/A')}</p>
-                <p><strong>Role:</strong> {profileLoading ? 'Loading...' : (user?.role || 'N/A')}</p>
-                <p>
-                  <strong>Payment wallet:</strong>
-                  {' '}
-                  {paymentAccountLoading
-                    ? 'Checking...'
-                    : paymentAccount?.exists
-                      ? 'ready to use'
-                      : 'not set up yet'}
-                </p>
-                {!paymentAccount?.exists && (
-                  <button className="btn" onClick={setupPaymentAccount}>
-                    Set up wallet
-                  </button>
-                )}
-                {profileError && <p className="error-msg">Profile: {profileError}</p>}
-                {paymentAccountError && <p className="error-msg">Wallet: {paymentAccountError}</p>}
-                <button className="btn btn-outline" onClick={() => fetchProfile(token)}>Refresh account</button>
-              </article>
+          {loadingEvents ? (
+            <div className="skeleton-grid">
+              {[1, 2, 3].map((i) => <div key={i} className="skeleton-card" />)}
+            </div>
+          ) : (
+            <div className="events-grid">
+              {eventsError && <p className="error-msg">{eventsError}</p>}
+              {events.length === 0 && !eventsError && (
+                <div className="empty-state">No events available right now — check back soon.</div>
+              )}
+              {events.slice(0, 9).map((ev) => {
+                const qty = quantityByEvent[ev.id] || 1;
+                const buyingThis = checkoutLoadingEventId === ev.id;
+                return (
+                  <article key={ev.id} className="event-card">
+                    <div className="event-card-banner">
+                      <div className="event-card-banner-bg" style={{ background: getBannerGradient(ev.id || ev.name) }} />
+                      <div className="event-card-banner-overlay" />
+                      <div className="event-card-status">
+                        <span className={statusClass(ev.status)}>{ev.status || 'draft'}</span>
+                      </div>
+                    </div>
 
-              <article className="panel-card reveal">
-                <h2>Quick Reservation</h2>
-                <label>Event ID</label>
-                <input
-                  value={reservationEventId}
-                  onChange={(e) => setReservationEventId(e.target.value)}
-                  placeholder="Paste an event id"
-                />
-                <label>Quantity</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={reservationQty}
-                  onChange={(e) => setReservationQty(e.target.value)}
-                />
-                <button className="btn" onClick={reserveTickets}>Reserve tickets</button>
-                <p className="hint">Reservation only holds tickets. Complete payment through Buy now.</p>
-                {reservationResult && (
-                  <p className="hint">
-                    Reserved: {reservationResult?.tickets?.length || 0} tickets
-                  </p>
-                )}
-                <label>Reservation ticket ID</label>
-                <input
-                  value={reservationStatusTicketId}
-                  onChange={(e) => setReservationStatusTicketId(e.target.value)}
-                  placeholder="Ticket id to check"
-                />
-                <button className="btn btn-outline" onClick={checkReservationStatus}>Check status</button>
-                {reservationStatusResult && (
-                  <p className="hint">Status: <span className={statusClass(reservationStatusResult.status)}>{reservationStatusResult.status}</span></p>
-                )}
-              </article>
+                    <div className="event-card-body">
+                      <div className="event-card-title">{ev.name || 'Unnamed Event'}</div>
+                      {ev.description && <p className="event-card-desc">{ev.description}</p>}
 
+                      <div className="event-card-meta">
+                        {ev.venue && (
+                          <div className="event-card-meta-row">
+                            <IconPin />
+                            {ev.venue}
+                          </div>
+                        )}
+                        <div className="event-card-meta-row">
+                          <IconCal />
+                          {formatDate(ev.date)}
+                        </div>
+                      </div>
+
+                      <div className="event-card-footer">
+                        <div className="event-price">
+                          <span className="event-price-label">From</span>
+                          <span className="event-price-value">€15.00</span>
+                        </div>
+
+                        <div className="event-buy-group">
+                          <div className="qty-stepper">
+                            <button onClick={() => stepQty(ev.id, -1)}>−</button>
+                            <span>{qty}</span>
+                            <button onClick={() => stepQty(ev.id, +1)}>+</button>
+                          </div>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handleCheckout(ev.id)}
+                            disabled={!token || buyingThis}
+                            title={!token ? 'Sign in to buy' : undefined}
+                          >
+                            {buyingThis ? '…' : token ? 'Buy' : '🔒'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+
+          {!token && (
+            <p style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+              Sign in to purchase tickets
+            </p>
+          )}
+        </section>
+
+        {/* ── ACCOUNT (logged in) ──────────────── */}
+        {token && (
+          <section className="account-section reveal">
+            <div className="section-header">
+              <div><h2>My Account</h2></div>
+            </div>
+
+            <div className="account-tabs">
+              <button className={`account-tab ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}>Profile</button>
+              <button className={`account-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => setActiveTab('orders')}>Orders</button>
+              <button className={`account-tab ${activeTab === 'refunds' ? 'active' : ''}`} onClick={() => setActiveTab('refunds')}>Refunds</button>
               {isPrivilegedUser && (
-                <article className="panel-card reveal manager-card">
-                  <h2>Operations Area</h2>
-                  <p className="hint">Advanced controls for promoter/admin accounts.</p>
+                <button className={`account-tab ${activeTab === 'manage' ? 'active' : ''}`} onClick={() => setActiveTab('manage')}>Manage</button>
+              )}
+            </div>
 
-                  <details className="advanced-drawer">
-                    <summary>Open advanced tools</summary>
+            {/* ── PROFILE TAB ─────────────── */}
+            {activeTab === 'profile' && (
+              <div className="profile-grid reveal">
+                <div className="account-card">
+                  <h3>Your Info</h3>
+                  <div className="profile-identity">
+                    <div className="profile-avatar">{initials}</div>
+                    <div>
+                      <div className="profile-name">{profileLoading ? 'Loading…' : (user?.full_name || firstName)}</div>
+                      <div className="profile-email">{user?.email || '—'}</div>
+                    </div>
+                  </div>
+                  <div className="info-row">
+                    <span>Role</span>
+                    <strong style={{ textTransform: 'capitalize' }}>{user?.role || '—'}</strong>
+                  </div>
+                  {profileError && <p className="error-msg" style={{ marginTop: '0.5rem' }}>{profileError}</p>}
+                  <div style={{ marginTop: '0.75rem' }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => fetchProfile(token)}>↻ Refresh</button>
+                  </div>
+                </div>
 
-                    <div className="manager-section">
-                      <h3>Create Event</h3>
+                <div className="account-card">
+                  <h3>Payment Wallet</h3>
+                  <div className={`wallet-status ${!paymentAccount?.exists ? 'wallet-not-ready' : ''}`}>
+                    <div className="wallet-status-text">
+                      <p>{paymentAccountLoading ? 'Checking…' : paymentAccount?.exists ? '✓ Wallet active' : 'Wallet not set up'}</p>
+                      <small>{paymentAccount?.exists ? 'Ready for checkout' : 'Required to buy tickets'}</small>
+                    </div>
+                    {!paymentAccount?.exists && !paymentAccountLoading && (
+                      <button className="btn btn-primary btn-sm" onClick={setupPaymentAccount}>Set up →</button>
+                    )}
+                    {paymentAccount?.exists && walletActionUrl && (
+                      <a className="btn btn-ghost btn-sm" href={walletActionUrl}>Open wallet →</a>
+                    )}
+                  </div>
+                  {paymentAccountError && <p className="error-msg" style={{ marginTop: '0.5rem' }}>{paymentAccountError}</p>}
+                </div>
+              </div>
+            )}
+
+            {/* ── ORDERS TAB ──────────────── */}
+            {activeTab === 'orders' && (
+              <div className="reveal">
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.9rem' }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => fetchPayments(token)}>↻ Refresh orders</button>
+                </div>
+                {paymentsLoading && (
+                  <div className="skeleton-grid" style={{ gridTemplateColumns: '1fr' }}>
+                    {[1, 2].map((i) => <div key={i} className="skeleton-card" style={{ height: 80 }} />)}
+                  </div>
+                )}
+                {paymentsError && <p className="error-msg">{paymentsError}</p>}
+                {!paymentsLoading && paymentItems.length === 0 && (
+                  <div className="empty-state">No orders yet. Buy tickets from the events above.</div>
+                )}
+                <div className="orders-list">
+                  {paymentItems.slice(0, 8).map((p) => (
+                    <div key={p.id} className="order-card">
+                      <div className="order-main">
+                        <div className="order-amount">{p.amount} {p.currency?.toUpperCase?.() || ''}</div>
+                        <div className="order-date">{formatDate(p.created_at)}</div>
+                        <div className="order-id">{p.id}</div>
+                      </div>
+                      <div className="order-actions">
+                        <span className={statusClass(p.status)}>{p.status}</span>
+                        <button className="btn btn-ghost btn-sm" onClick={() => triggerRefund(p.id)}>Refund</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── REFUNDS TAB ─────────────── */}
+            {activeTab === 'refunds' && (
+              <div className="reveal">
+                <div className="refund-form">
+                  <h3>Request a Refund</h3>
+                  <div className="form-field">
+                    <label>Order ID</label>
+                    <input
+                      value={refundPaymentId}
+                      onChange={(e) => setRefundPaymentId(e.target.value)}
+                      placeholder="Select from Orders tab or paste here"
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label>Ticket IDs (optional, comma-separated)</label>
+                    <input
+                      value={refundTicketIds}
+                      onChange={(e) => setRefundTicketIds(e.target.value)}
+                      placeholder="Leave blank to refund all tickets"
+                    />
+                    <span className="form-hint">Leave blank to refund the full order.</span>
+                  </div>
+                  <button className="btn btn-primary" onClick={handleRefund} style={{ width: '100%' }}>
+                    Request refund
+                  </button>
+                  {refundError && <p className="error-msg" style={{ marginTop: '0.6rem' }}>{refundError}</p>}
+                  {refundResult && (
+                    <p className="form-hint" style={{ marginTop: '0.6rem' }}>
+                      Refund status: <span className={statusClass(refundResult.status)}>{refundResult.status}</span>
+                    </p>
+                  )}
+                  {paymentItems.length > 0 && (
+                    <div className="quick-pick" style={{ marginTop: '1rem' }}>
+                      <p>Quick select a recent order:</p>
+                      <div className="quick-pick-list">
+                        {paymentItems.slice(0, 4).map((p) => (
+                          <button key={p.id} className="chip-btn" onClick={() => setRefundPaymentId(p.id)}>
+                            {p.id.slice(0, 8)}… · {p.amount} {p.currency?.toUpperCase?.() || ''}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── MANAGE TAB (admin/promoter) ─ */}
+            {activeTab === 'manage' && isPrivilegedUser && (
+              <div className="reveal" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <details className="manager-section">
+                  <summary>Create Event</summary>
+                  <div className="manager-inner">
+                    <div className="manager-block">
                       <div className="manager-grid">
-                        <div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Event name</label>
-                          <input
-                            value={managerEventName}
-                            onChange={(e) => setManagerEventName(e.target.value)}
-                            placeholder="Event name"
-                          />
+                          <input value={managerEventName} onChange={(e) => setManagerEventName(e.target.value)} placeholder="Summer Concert" />
                         </div>
-                        <div>
-                          <label>Event date</label>
-                          <input
-                            type="datetime-local"
-                            value={managerEventDate}
-                            onChange={(e) => setManagerEventDate(e.target.value)}
-                          />
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label>Date & time</label>
+                          <input type="datetime-local" value={managerEventDate} onChange={(e) => setManagerEventDate(e.target.value)} />
                         </div>
-                      </div>
-                      <div className="manager-grid">
-                        <div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Venue</label>
-                          <input
-                            value={managerEventVenue}
-                            onChange={(e) => setManagerEventVenue(e.target.value)}
-                            placeholder="Venue"
-                          />
+                          <input value={managerEventVenue} onChange={(e) => setManagerEventVenue(e.target.value)} placeholder="Lisbon Arena" />
                         </div>
-                        <div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Description</label>
-                          <input
-                            value={managerEventDescription}
-                            onChange={(e) => setManagerEventDescription(e.target.value)}
-                            placeholder="Description"
-                          />
+                          <input value={managerEventDescription} onChange={(e) => setManagerEventDescription(e.target.value)} placeholder="Short description…" />
                         </div>
                       </div>
-                      <div className="manager-actions">
-                        <button className="btn" onClick={handleCreateEvent} disabled={managerLoading}>
-                          Create event
+                      <div className="btn-row">
+                        <button className="btn btn-primary btn-sm" onClick={handleCreateEvent} disabled={managerLoading}>
+                          {managerLoading ? 'Creating…' : 'Create event'}
                         </button>
                       </div>
                     </div>
+                  </div>
+                </details>
 
-                    <div className="manager-section">
-                      <h3>Manage Event</h3>
+                <details className="manager-section">
+                  <summary>Manage Event</summary>
+                  <div className="manager-inner">
+                    <div className="manager-block">
                       <div className="manager-grid">
-                        <div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Event ID</label>
-                          <input
-                            value={managerTargetEventId}
-                            onChange={(e) => setManagerTargetEventId(e.target.value)}
-                            placeholder="Event UUID"
-                          />
+                          <input value={managerTargetEventId} onChange={(e) => setManagerTargetEventId(e.target.value)} placeholder="Event UUID" />
                         </div>
-                        <div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Status</label>
-                          <select
-                            value={managerTargetEventStatus}
-                            onChange={(e) => setManagerTargetEventStatus(e.target.value)}
-                          >
-                            <option value="draft">draft</option>
-                            <option value="published">published</option>
-                            <option value="cancelled">cancelled</option>
-                            <option value="sold_out">sold_out</option>
-                            <option value="completed">completed</option>
+                          <select value={managerTargetEventStatus} onChange={(e) => setManagerTargetEventStatus(e.target.value)}>
+                            <option value="draft">Draft</option>
+                            <option value="published">Published</option>
+                            <option value="cancelled">Cancelled</option>
+                            <option value="sold_out">Sold out</option>
+                            <option value="completed">Completed</option>
                           </select>
                         </div>
                       </div>
-                      <div className="manager-actions manager-actions-split">
-                        <button className="btn btn-outline" onClick={handleUpdateEventStatus} disabled={managerLoading}>
-                          Update status
-                        </button>
-                        <button className="btn btn-outline" onClick={handleDeleteEvent} disabled={managerLoading}>
-                          Delete event
-                        </button>
+                      <div className="btn-row">
+                        <button className="btn btn-ghost btn-sm" onClick={handleUpdateEventStatus} disabled={managerLoading}>Update status</button>
+                        <button className="btn btn-sm" style={{ background: 'rgba(248,113,113,0.15)', color: '#fca5a5', border: '1px solid rgba(248,113,113,0.3)' }} onClick={handleDeleteEvent} disabled={managerLoading}>Delete event</button>
                       </div>
                     </div>
-
-                    <div className="manager-section">
-                      <h3>Ticket Batch</h3>
-                      <div className="manager-grid">
-                        <div>
-                          <label>Event ID</label>
-                          <input
-                            value={managerBatchEventId}
-                            onChange={(e) => setManagerBatchEventId(e.target.value)}
-                            placeholder="Event UUID"
-                          />
-                        </div>
-                        <div>
-                          <label>Category</label>
-                          <input
-                            value={managerBatchCategory}
-                            onChange={(e) => setManagerBatchCategory(e.target.value)}
-                            placeholder="General / VIP"
-                          />
-                        </div>
-                      </div>
-                      <div className="manager-grid">
-                        <div>
-                          <label>Price (EUR)</label>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={managerBatchPrice}
-                            onChange={(e) => setManagerBatchPrice(e.target.value)}
-                          />
-                        </div>
-                        <div>
-                          <label>Quantity</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="50000"
-                            value={managerBatchQuantity}
-                            onChange={(e) => setManagerBatchQuantity(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                      <div className="manager-actions">
-                        <button className="btn" onClick={handleCreateTicketBatch} disabled={managerLoading}>
-                          Create batch
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="manager-section">
-                      <h3>Ticket Lifecycle</h3>
-                      <label>Ticket ID</label>
-                      <input
-                        value={managerTicketId}
-                        onChange={(e) => setManagerTicketId(e.target.value)}
-                        placeholder="Ticket UUID"
-                      />
-                      <div className="manager-actions manager-actions-quad">
-                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('reserve')} disabled={managerLoading}>
-                          Reserve
-                        </button>
-                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('sell')} disabled={managerLoading}>
-                          Sell
-                        </button>
-                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('use')} disabled={managerLoading}>
-                          Use
-                        </button>
-                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('cancel')} disabled={managerLoading}>
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </details>
-
-                  {managerError && <p className="error-msg">{managerError}</p>}
-                </article>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'payments' && (
-            <div className="payments-board reveal">
-              <div className="section-head">
-                <h2>Your Orders</h2>
-                <button className="btn btn-outline" onClick={() => fetchPayments(token)}>Refresh orders</button>
-              </div>
-
-              {paymentsLoading && (
-                <div className="skeleton-grid payments-skeleton">
-                  {[1, 2].map((i) => <div key={i} className="skeleton-card" />)}
-                </div>
-              )}
-
-              {paymentsError && <p className="error-msg wide">{paymentsError}</p>}
-
-              {!paymentsLoading && paymentItems.length === 0 && (
-                <p className="hint wide">No payments yet. Complete checkout from any event card.</p>
-              )}
-
-              <div className="payments-grid">
-                {!paymentsLoading && paymentItems.slice(0, 8).map((p) => (
-                  <article key={p.id} className="payment-card">
-                    <div className="payment-top">
-                      <h3>{p.amount} {p.currency?.toUpperCase?.() || ''}</h3>
-                      <span className={statusClass(p.status)}>{p.status}</span>
-                    </div>
-                    <p className="payment-id">{p.id}</p>
-                    <p className="hint">Created: {formatDate(p.created_at)}</p>
-                    <button className="btn btn-outline" onClick={() => usePaymentInRefund(p.id)}>
-                      Use in refund
-                    </button>
-                  </article>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'refund' && (
-            <article className="panel-card refund-card reveal">
-              <h2>Request Refund</h2>
-              <label>Payment ID</label>
-              <input
-                value={refundPaymentId}
-                onChange={(e) => setRefundPaymentId(e.target.value)}
-                placeholder="Payment UUID"
-              />
-
-              <label>Ticket IDs (comma-separated)</label>
-              <input
-                value={refundTicketIds}
-                onChange={(e) => setRefundTicketIds(e.target.value)}
-                placeholder="ticket-1,ticket-2"
-              />
-
-              <button className="btn" onClick={handleRefund}>Request refund</button>
-
-              {refundError && <p className="error-msg">{refundError}</p>}
-              {refundResult && <p className="hint">Refund status: <span className={statusClass(refundResult.status)}>{refundResult.status}</span></p>}
-
-              {paymentItems.length > 0 && (
-                <div className="quick-links">
-                  <p className="hint">Quick pick a recent payment:</p>
-                  <div className="quick-link-list">
-                    {paymentItems.slice(0, 3).map((p) => (
-                      <button key={p.id} className="pill-btn" onClick={() => setRefundPaymentId(p.id)}>
-                        {p.id.slice(0, 8)}...
-                      </button>
-                    ))}
                   </div>
-                </div>
-              )}
-            </article>
-          )}
-        </section>
+                </details>
+
+                <details className="manager-section">
+                  <summary>Ticket Batch</summary>
+                  <div className="manager-inner">
+                    <div className="manager-block">
+                      <div className="manager-grid">
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label>Event ID</label>
+                          <input value={managerBatchEventId} onChange={(e) => setManagerBatchEventId(e.target.value)} placeholder="Event UUID" />
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label>Category</label>
+                          <input value={managerBatchCategory} onChange={(e) => setManagerBatchCategory(e.target.value)} placeholder="General / VIP" />
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label>Price (EUR)</label>
+                          <input type="number" min="0" step="0.01" value={managerBatchPrice} onChange={(e) => setManagerBatchPrice(e.target.value)} />
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label>Quantity</label>
+                          <input type="number" min="1" max="50000" value={managerBatchQuantity} onChange={(e) => setManagerBatchQuantity(e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="btn-row">
+                        <button className="btn btn-primary btn-sm" onClick={handleCreateTicketBatch} disabled={managerLoading}>Create batch</button>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+                <details className="manager-section">
+                  <summary>Ticket Lifecycle</summary>
+                  <div className="manager-inner">
+                    <div className="manager-block">
+                      <div className="form-field" style={{ marginBottom: 0 }}>
+                        <label>Ticket ID</label>
+                        <input value={managerTicketId} onChange={(e) => setManagerTicketId(e.target.value)} placeholder="Ticket UUID" />
+                      </div>
+                      <div className="btn-row">
+                        {['reserve', 'sell', 'use', 'cancel'].map((action) => (
+                          <button key={action} className="btn btn-ghost btn-sm" onClick={() => handleTicketLifecycleAction(action)} disabled={managerLoading} style={{ textTransform: 'capitalize' }}>
+                            {action}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+                {managerError && <p className="error-msg">{managerError}</p>}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ── SIGN IN GATE (logged out) ────────── */}
+        {!token && (
+          <section style={{ marginBottom: '3rem' }}>
+            <div className="signin-gate">
+              <div style={{ fontSize: '2rem' }}>🎟️</div>
+              <div>
+                <p style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '1.1rem', marginBottom: '0.4rem', color: 'var(--text-primary)' }}>
+                  Ready to get your tickets?
+                </p>
+                <p>Create a free account or sign in to buy tickets and manage your orders.</p>
+              </div>
+              <div className="signin-gate-btns">
+                <button className="btn btn-primary" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
+                  Create free account
+                </button>
+                <button className="btn btn-ghost" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
+                  Sign in
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
+
+      {/* ── TOAST ───────────────────────────────── */}
+      {toast && (
+        <div className="toast-wrap">
+          <div className={`toast toast-${toast.type}`}>{toast.text}</div>
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
