@@ -314,6 +314,11 @@ body {
   margin-bottom: 0.8rem;
 }
 
+.event-price {
+  font-weight: 700;
+  color: #8dd8ff;
+}
+
 .event-action {
   display: flex;
   flex-direction: column;
@@ -392,6 +397,23 @@ body {
 
 .manager-card {
   gap: 0.8rem;
+}
+
+.advanced-drawer {
+  border: 1px solid rgba(83, 182, 255, 0.28);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem;
+  background: rgba(8, 15, 28, 0.28);
+}
+
+.advanced-drawer summary {
+  cursor: pointer;
+  font-family: 'Space Grotesk', sans-serif;
+  color: #dbeafe;
+}
+
+.advanced-drawer[open] summary {
+  margin-bottom: 0.55rem;
 }
 
 .manager-section {

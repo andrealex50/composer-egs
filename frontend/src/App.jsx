@@ -688,6 +688,8 @@ function App() {
   };
 
   const paymentItems = payments || [];
+  const featuredEvents = events.slice(0, 6);
+  const firstName = (user?.full_name || user?.email || 'Guest').split(' ')[0];
 
   return (
     <div className="app-shell">
@@ -695,15 +697,15 @@ function App() {
       <div className="bg-orb orb-b" />
 
       <header className="hero">
-        <div className="hero-tag">Composer Demo Ready</div>
-        <h1>FlashSale Portal</h1>
-        <p className="hero-subtitle">Fast event checkout orchestration across Auth, Inventory and Payment.</p>
+        <div className="hero-tag">FlashSale</div>
+        <h1>Your next event starts here.</h1>
+        <p className="hero-subtitle">Discover events, buy in seconds, and track everything in one seamless experience.</p>
 
         <div className="hero-steps">
-          <span>1. Sign in</span>
-          <span>2. Pick event</span>
-          <span>3. Complete checkout</span>
-          <span>4. Verify payment</span>
+          <span>Sign in</span>
+          <span>Pick an event</span>
+          <span>Checkout</span>
+          <span>Track your order</span>
         </div>
       </header>
 
@@ -718,28 +720,31 @@ function App() {
       <section className="auth-panel">
         <div className="auth-status copy-block">
           {token ? (
-            <p>Signed in as <strong>{user?.email || 'N/A'}</strong>.</p>
+            <>
+              <p>Welcome back, <strong>{firstName}</strong>.</p>
+              <p className="hint">Signed in as: {user?.email || 'N/A'}</p>
+            </>
           ) : (
             <>
-              <p>Welcome. Sign in using the Auth UI to continue.</p>
-              <p className="hint">The dedicated auth frontend remains separate. Sign-in there now returns securely to the Composer with a one-time handoff code.</p>
+              <p>Sign in to unlock checkout, wallet setup, and order history.</p>
+              <p className="hint">Authentication happens in Auth UI and returns securely to Composer.</p>
             </>
           )}
         </div>
 
         <div className="auth-buttons">
           {token ? (
-            <button className="btn btn-outline" onClick={handleLogout}>Logout</button>
+            <button className="btn btn-outline" onClick={handleLogout}>Sign out</button>
           ) : (
             <>
               <button className="btn btn-outline" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
-                Auth Register UI
+                Create account
               </button>
               <button className="btn btn-outline" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
-                Auth Login UI
+                Sign in
               </button>
               <a className="btn btn-outline" href={buildAuthUiUrl(AUTH_UI_FORGOT_PATH)}>
-                Forgot Password UI
+                Forgot password
               </a>
             </>
           )}
@@ -749,11 +754,11 @@ function App() {
 
       <section className="events-section">
         <div className="section-head">
-          <h2>Live Events</h2>
-          <button className="btn btn-outline" onClick={fetchEvents}>Refresh Events</button>
+          <h2>Featured Events</h2>
+          <button className="btn btn-outline" onClick={fetchEvents}>Refresh events</button>
         </div>
 
-        {!token && <div className="login-gate">Login is required to purchase tickets.</div>}
+        {!token && <div className="login-gate">You can browse events freely. Sign in when you are ready to buy.</div>}
 
         {loadingEvents ? (
           <div className="skeleton-grid">
@@ -762,8 +767,8 @@ function App() {
         ) : (
           <div className="events-grid">
             {eventsError && <p className="error-msg wide">{eventsError}</p>}
-            {events.length === 0 && <p className="hint wide">No events found.</p>}
-            {events.map((ev) => {
+            {events.length === 0 && <p className="hint wide">No events available right now.</p>}
+            {featuredEvents.map((ev) => {
               const qty = quantityByEvent[ev.id] || 1;
               const buyingThis = checkoutLoadingEventId === ev.id;
               return (
@@ -778,11 +783,12 @@ function App() {
                   <div className="event-meta">
                     <span>{ev.venue || 'Venue TBD'}</span>
                     <span>{formatDate(ev.date)}</span>
+                    <span className="event-price">From EUR 15.00</span>
                   </div>
 
                   <div className="event-action">
                     <div className="qty-row">
-                      <label>Qty</label>
+                      <label>Tickets</label>
                       <input
                         type="number"
                         min="1"
@@ -797,7 +803,7 @@ function App() {
                         className="btn btn-outline"
                         onClick={() => useEventInReservation(ev.id)}
                       >
-                        Use Event ID
+                        Save for later
                       </button>
 
                       <button
@@ -805,7 +811,7 @@ function App() {
                         onClick={() => handleCheckout(ev.id)}
                         disabled={!token || buyingThis}
                       >
-                        {buyingThis ? 'Redirecting...' : token ? 'Buy Ticket(s)' : 'Login to Buy'}
+                        {buyingThis ? 'Redirecting...' : token ? 'Buy now' : 'Sign in to buy'}
                       </button>
                     </div>
                   </div>
@@ -823,217 +829,55 @@ function App() {
               className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
               onClick={() => setActiveTab('overview')}
             >
-              Overview
+              Home
             </button>
             <button
               className={`tab-btn ${activeTab === 'payments' ? 'active' : ''}`}
               onClick={() => setActiveTab('payments')}
             >
-              Payments
+              Orders
             </button>
             <button
               className={`tab-btn ${activeTab === 'refund' ? 'active' : ''}`}
               onClick={() => setActiveTab('refund')}
             >
-              Refund
+              Refunds
             </button>
           </div>
 
           {activeTab === 'overview' && (
             <div className="panel-grid">
               <article className="panel-card reveal">
-                <h2>Profile</h2>
+                <h2>Account and Wallet</h2>
                 <p><strong>Email:</strong> {profileLoading ? 'Loading...' : (user?.email || 'N/A')}</p>
                 <p><strong>Name:</strong> {profileLoading ? 'Loading...' : (user?.full_name || 'N/A')}</p>
                 <p><strong>Role:</strong> {profileLoading ? 'Loading...' : (user?.role || 'N/A')}</p>
                 <p>
-                  <strong>Local Payment account:</strong>
+                  <strong>Payment wallet:</strong>
                   {' '}
                   {paymentAccountLoading
                     ? 'Checking...'
                     : paymentAccount?.exists
-                      ? 'ready'
-                      : 'not created yet'}
+                      ? 'ready to use'
+                      : 'not set up yet'}
                 </p>
                 {!paymentAccount?.exists && (
                   <button className="btn" onClick={setupPaymentAccount}>
-                    Create Payment Account
+                    Set up wallet
                   </button>
                 )}
-                {profileError && <p className="error-msg">Profile error: {profileError}</p>}
-                {paymentAccountError && <p className="error-msg">Payment account: {paymentAccountError}</p>}
-                <button className="btn btn-outline" onClick={() => fetchProfile(token)}>Refresh Profile</button>
+                {profileError && <p className="error-msg">Profile: {profileError}</p>}
+                {paymentAccountError && <p className="error-msg">Wallet: {paymentAccountError}</p>}
+                <button className="btn btn-outline" onClick={() => fetchProfile(token)}>Refresh account</button>
               </article>
 
-              {isPrivilegedUser && (
-                <article className="panel-card reveal manager-card">
-                  <h2>Promoter/Admin Controls</h2>
-                  <p className="hint">Manage events and tickets from one place.</p>
-
-                  <div className="manager-section">
-                    <h3>Event Creation</h3>
-                    <div className="manager-grid">
-                      <div>
-                        <label>New Event Name</label>
-                        <input
-                          value={managerEventName}
-                          onChange={(e) => setManagerEventName(e.target.value)}
-                          placeholder="Event name"
-                        />
-                      </div>
-                      <div>
-                        <label>New Event Date</label>
-                        <input
-                          type="datetime-local"
-                          value={managerEventDate}
-                          onChange={(e) => setManagerEventDate(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <div className="manager-grid">
-                      <div>
-                        <label>Venue</label>
-                        <input
-                          value={managerEventVenue}
-                          onChange={(e) => setManagerEventVenue(e.target.value)}
-                          placeholder="Venue"
-                        />
-                      </div>
-                      <div>
-                        <label>Description</label>
-                        <input
-                          value={managerEventDescription}
-                          onChange={(e) => setManagerEventDescription(e.target.value)}
-                          placeholder="Description"
-                        />
-                      </div>
-                    </div>
-                    <div className="manager-actions">
-                      <button className="btn" onClick={handleCreateEvent} disabled={managerLoading}>
-                        Create Event
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="manager-section">
-                    <h3>Event Management</h3>
-                    <div className="manager-grid">
-                      <div>
-                        <label>Target Event ID</label>
-                        <input
-                          value={managerTargetEventId}
-                          onChange={(e) => setManagerTargetEventId(e.target.value)}
-                          placeholder="Event UUID"
-                        />
-                      </div>
-                      <div>
-                        <label>Event Status</label>
-                        <select
-                          value={managerTargetEventStatus}
-                          onChange={(e) => setManagerTargetEventStatus(e.target.value)}
-                        >
-                          <option value="draft">draft</option>
-                          <option value="published">published</option>
-                          <option value="cancelled">cancelled</option>
-                          <option value="sold_out">sold_out</option>
-                          <option value="completed">completed</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="manager-actions manager-actions-split">
-                      <button className="btn btn-outline" onClick={handleUpdateEventStatus} disabled={managerLoading}>
-                        Update Event Status
-                      </button>
-                      <button className="btn btn-outline" onClick={handleDeleteEvent} disabled={managerLoading}>
-                        Delete Event
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="manager-section">
-                    <h3>Ticket Batch</h3>
-                    <div className="manager-grid">
-                      <div>
-                        <label>Ticket Batch Event ID</label>
-                        <input
-                          value={managerBatchEventId}
-                          onChange={(e) => setManagerBatchEventId(e.target.value)}
-                          placeholder="Event UUID"
-                        />
-                      </div>
-                      <div>
-                        <label>Category</label>
-                        <input
-                          value={managerBatchCategory}
-                          onChange={(e) => setManagerBatchCategory(e.target.value)}
-                          placeholder="General / VIP"
-                        />
-                      </div>
-                    </div>
-                    <div className="manager-grid">
-                      <div>
-                        <label>Price (EUR)</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={managerBatchPrice}
-                          onChange={(e) => setManagerBatchPrice(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label>Quantity</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="50000"
-                          value={managerBatchQuantity}
-                          onChange={(e) => setManagerBatchQuantity(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <div className="manager-actions">
-                      <button className="btn" onClick={handleCreateTicketBatch} disabled={managerLoading}>
-                        Create Ticket Batch
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="manager-section">
-                    <h3>Ticket Lifecycle</h3>
-                    <label>Ticket ID</label>
-                    <input
-                      value={managerTicketId}
-                      onChange={(e) => setManagerTicketId(e.target.value)}
-                      placeholder="Ticket UUID"
-                    />
-                    <div className="manager-actions manager-actions-quad">
-                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('reserve')} disabled={managerLoading}>
-                        Reserve
-                      </button>
-                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('sell')} disabled={managerLoading}>
-                        Sell
-                      </button>
-                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('use')} disabled={managerLoading}>
-                        Use
-                      </button>
-                      <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('cancel')} disabled={managerLoading}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-
-                  {managerError && <p className="error-msg">{managerError}</p>}
-                </article>
-              )}
-
               <article className="panel-card reveal">
-                <h2>Reservations</h2>
+                <h2>Quick Reservation</h2>
                 <label>Event ID</label>
                 <input
                   value={reservationEventId}
                   onChange={(e) => setReservationEventId(e.target.value)}
-                  placeholder="Paste event id"
+                  placeholder="Paste an event id"
                 />
                 <label>Quantity</label>
                 <input
@@ -1043,32 +887,198 @@ function App() {
                   value={reservationQty}
                   onChange={(e) => setReservationQty(e.target.value)}
                 />
-                <button className="btn" onClick={reserveTickets}>Reserve Tickets</button>
-                <p className="hint">Reservation only holds tickets. Use Buy Ticket(s) to create a payment.</p>
+                <button className="btn" onClick={reserveTickets}>Reserve tickets</button>
+                <p className="hint">Reservation only holds tickets. Complete payment through Buy now.</p>
                 {reservationResult && (
                   <p className="hint">
                     Reserved: {reservationResult?.tickets?.length || 0} tickets
                   </p>
                 )}
-                <label>Reservation ticket id</label>
+                <label>Reservation ticket ID</label>
                 <input
                   value={reservationStatusTicketId}
                   onChange={(e) => setReservationStatusTicketId(e.target.value)}
                   placeholder="Ticket id to check"
                 />
-                <button className="btn btn-outline" onClick={checkReservationStatus}>Check Status</button>
+                <button className="btn btn-outline" onClick={checkReservationStatus}>Check status</button>
                 {reservationStatusResult && (
                   <p className="hint">Status: <span className={statusClass(reservationStatusResult.status)}>{reservationStatusResult.status}</span></p>
                 )}
               </article>
+
+              {isPrivilegedUser && (
+                <article className="panel-card reveal manager-card">
+                  <h2>Operations Area</h2>
+                  <p className="hint">Advanced controls for promoter/admin accounts.</p>
+
+                  <details className="advanced-drawer">
+                    <summary>Open advanced tools</summary>
+
+                    <div className="manager-section">
+                      <h3>Create Event</h3>
+                      <div className="manager-grid">
+                        <div>
+                          <label>Event name</label>
+                          <input
+                            value={managerEventName}
+                            onChange={(e) => setManagerEventName(e.target.value)}
+                            placeholder="Event name"
+                          />
+                        </div>
+                        <div>
+                          <label>Event date</label>
+                          <input
+                            type="datetime-local"
+                            value={managerEventDate}
+                            onChange={(e) => setManagerEventDate(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="manager-grid">
+                        <div>
+                          <label>Venue</label>
+                          <input
+                            value={managerEventVenue}
+                            onChange={(e) => setManagerEventVenue(e.target.value)}
+                            placeholder="Venue"
+                          />
+                        </div>
+                        <div>
+                          <label>Description</label>
+                          <input
+                            value={managerEventDescription}
+                            onChange={(e) => setManagerEventDescription(e.target.value)}
+                            placeholder="Description"
+                          />
+                        </div>
+                      </div>
+                      <div className="manager-actions">
+                        <button className="btn" onClick={handleCreateEvent} disabled={managerLoading}>
+                          Create event
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="manager-section">
+                      <h3>Manage Event</h3>
+                      <div className="manager-grid">
+                        <div>
+                          <label>Event ID</label>
+                          <input
+                            value={managerTargetEventId}
+                            onChange={(e) => setManagerTargetEventId(e.target.value)}
+                            placeholder="Event UUID"
+                          />
+                        </div>
+                        <div>
+                          <label>Status</label>
+                          <select
+                            value={managerTargetEventStatus}
+                            onChange={(e) => setManagerTargetEventStatus(e.target.value)}
+                          >
+                            <option value="draft">draft</option>
+                            <option value="published">published</option>
+                            <option value="cancelled">cancelled</option>
+                            <option value="sold_out">sold_out</option>
+                            <option value="completed">completed</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="manager-actions manager-actions-split">
+                        <button className="btn btn-outline" onClick={handleUpdateEventStatus} disabled={managerLoading}>
+                          Update status
+                        </button>
+                        <button className="btn btn-outline" onClick={handleDeleteEvent} disabled={managerLoading}>
+                          Delete event
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="manager-section">
+                      <h3>Ticket Batch</h3>
+                      <div className="manager-grid">
+                        <div>
+                          <label>Event ID</label>
+                          <input
+                            value={managerBatchEventId}
+                            onChange={(e) => setManagerBatchEventId(e.target.value)}
+                            placeholder="Event UUID"
+                          />
+                        </div>
+                        <div>
+                          <label>Category</label>
+                          <input
+                            value={managerBatchCategory}
+                            onChange={(e) => setManagerBatchCategory(e.target.value)}
+                            placeholder="General / VIP"
+                          />
+                        </div>
+                      </div>
+                      <div className="manager-grid">
+                        <div>
+                          <label>Price (EUR)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={managerBatchPrice}
+                            onChange={(e) => setManagerBatchPrice(e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label>Quantity</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="50000"
+                            value={managerBatchQuantity}
+                            onChange={(e) => setManagerBatchQuantity(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="manager-actions">
+                        <button className="btn" onClick={handleCreateTicketBatch} disabled={managerLoading}>
+                          Create batch
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="manager-section">
+                      <h3>Ticket Lifecycle</h3>
+                      <label>Ticket ID</label>
+                      <input
+                        value={managerTicketId}
+                        onChange={(e) => setManagerTicketId(e.target.value)}
+                        placeholder="Ticket UUID"
+                      />
+                      <div className="manager-actions manager-actions-quad">
+                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('reserve')} disabled={managerLoading}>
+                          Reserve
+                        </button>
+                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('sell')} disabled={managerLoading}>
+                          Sell
+                        </button>
+                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('use')} disabled={managerLoading}>
+                          Use
+                        </button>
+                        <button className="btn btn-outline" onClick={() => handleTicketLifecycleAction('cancel')} disabled={managerLoading}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </details>
+
+                  {managerError && <p className="error-msg">{managerError}</p>}
+                </article>
+              )}
             </div>
           )}
 
           {activeTab === 'payments' && (
             <div className="payments-board reveal">
               <div className="section-head">
-                <h2>Payments History</h2>
-                <button className="btn btn-outline" onClick={() => fetchPayments(token)}>Refresh Payments</button>
+                <h2>Your Orders</h2>
+                <button className="btn btn-outline" onClick={() => fetchPayments(token)}>Refresh orders</button>
               </div>
 
               {paymentsLoading && (
@@ -1080,7 +1090,7 @@ function App() {
               {paymentsError && <p className="error-msg wide">{paymentsError}</p>}
 
               {!paymentsLoading && paymentItems.length === 0 && (
-                <p className="hint wide">No payments yet. Complete a checkout from an event card.</p>
+                <p className="hint wide">No payments yet. Complete checkout from any event card.</p>
               )}
 
               <div className="payments-grid">
@@ -1093,7 +1103,7 @@ function App() {
                     <p className="payment-id">{p.id}</p>
                     <p className="hint">Created: {formatDate(p.created_at)}</p>
                     <button className="btn btn-outline" onClick={() => usePaymentInRefund(p.id)}>
-                      Use in Refund
+                      Use in refund
                     </button>
                   </article>
                 ))}
@@ -1111,14 +1121,14 @@ function App() {
                 placeholder="Payment UUID"
               />
 
-              <label>Ticket IDs (comma separated)</label>
+              <label>Ticket IDs (comma-separated)</label>
               <input
                 value={refundTicketIds}
                 onChange={(e) => setRefundTicketIds(e.target.value)}
                 placeholder="ticket-1,ticket-2"
               />
 
-              <button className="btn" onClick={handleRefund}>Request Refund</button>
+              <button className="btn" onClick={handleRefund}>Request refund</button>
 
               {refundError && <p className="error-msg">{refundError}</p>}
               {refundResult && <p className="hint">Refund status: <span className={statusClass(refundResult.status)}>{refundResult.status}</span></p>}
