@@ -555,9 +555,23 @@ function App() {
     return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
+  const copyEventUuid = async (eventId) => {
+    const value = String(eventId || '').trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setToast({ type: 'success', text: `UUID copied: ${value.slice(0, 8)}...` });
+    } catch (_) {
+      setToast({ type: 'error', text: 'Could not copy UUID. Clipboard permission may be blocked.' });
+    }
+  };
+
   const paymentItems = payments || [];
   const firstName = (user?.full_name || user?.email || '').split(/[\s@]/)[0] || 'there';
   const initials = firstName.slice(0, 2).toUpperCase();
+  const managerEventChoices = events
+    .filter((ev) => ev?.id)
+    .map((ev) => ({ id: String(ev.id), label: `${ev.name || 'Unnamed event'} (${String(ev.id).slice(0, 8)}...)` }));
 
   return (
     <>
@@ -683,6 +697,19 @@ function App() {
                           <IconCal />
                           {formatDate(ev.date)}
                         </div>
+                        {isPrivilegedUser && ev.id && (
+                          <div className="event-card-meta-row" style={{ display: 'block', wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                            UUID: {ev.id}
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              style={{ marginLeft: '0.5rem', padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
+                              onClick={() => copyEventUuid(ev.id)}
+                              type="button"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       <div className="event-card-footer">
@@ -889,6 +916,21 @@ function App() {
                   <summary>Manage Event</summary>
                   <div className="manager-inner">
                     <div className="manager-block">
+                      <div className="form-field" style={{ marginBottom: '0.75rem' }}>
+                        <label>Pick Existing Event</label>
+                        <select
+                          value={managerTargetEventId}
+                          onChange={(e) => {
+                            setManagerTargetEventId(e.target.value);
+                            if (!managerBatchEventId) setManagerBatchEventId(e.target.value);
+                          }}
+                        >
+                          <option value="">Select event…</option>
+                          {managerEventChoices.map((choice) => (
+                            <option key={choice.id} value={choice.id}>{choice.label}</option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="manager-grid">
                         <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Event ID</label>
@@ -917,6 +959,15 @@ function App() {
                   <summary>Ticket Batch</summary>
                   <div className="manager-inner">
                     <div className="manager-block">
+                      <div className="form-field" style={{ marginBottom: '0.75rem' }}>
+                        <label>Pick Existing Event</label>
+                        <select value={managerBatchEventId} onChange={(e) => setManagerBatchEventId(e.target.value)}>
+                          <option value="">Select event…</option>
+                          {managerEventChoices.map((choice) => (
+                            <option key={choice.id} value={choice.id}>{choice.label}</option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="manager-grid">
                         <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Event ID</label>
