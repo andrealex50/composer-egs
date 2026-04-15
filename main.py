@@ -970,8 +970,8 @@ async def cancel_payment(payment_id: str, request: Request):
 async def download_receipt(payment_id: str, request: Request, authorization: Optional[str] = Header(None)):
     claims = await _get_authenticated_claims(authorization, request)
     customer = await _find_payment_customer_by_email(claims["_normalized_email"], request)
-    if not customer or not customer.get("id"):
-        raise HTTPException(status_code=404, detail="Pagamento não encontrado")
+    customer_id = str(customer.get("id")) if customer and customer.get("id") else None
+    auth_user_id = str(claims.get("user_id") or "")
 
     payment = await proxy(
         "GET",
@@ -980,7 +980,12 @@ async def download_receipt(payment_id: str, request: Request, authorization: Opt
         service_label="Payment Service",
         request=request,
     )
-    if str(payment.get("customer_id") or "") != str(customer["id"]):
+    
+    item_customer_id = str(payment.get("customer_id") or "")
+    item_meta = payment.get("metadata") or {}
+    initiator_id = str(item_meta.get("composer_initiator_auth_user_id") or "")
+
+    if not ((customer_id and item_customer_id == customer_id) or (auth_user_id and initiator_id == auth_user_id)):
         raise HTTPException(status_code=404, detail="Pagamento não encontrado")
 
     data = await proxy(
