@@ -23,7 +23,32 @@ const buildAuthUiUrl = (path, query = {}) => {
   return url.toString();
 };
 const buildPaymentUiUrl = (path) => new URL(path, PAYMENT_UI_BASE_URL).toString();
+const resolvePaymentUiUrl = (rawUrl) => {
+  const normalized = String(rawUrl || '').trim();
+  if (!normalized) return '';
+  try {
+    // Relative URLs from backend should resolve against payment UI origin, not Composer.
+    return new URL(normalized, PAYMENT_UI_BASE_URL).toString();
+  } catch (_) {
+    return '';
+  }
+};
 const buildApiUrl = (path) => new URL(path, API_BASE_URL || window.location.origin).toString();
+const buildComposerUrl = (query = {}) => {
+  const url = new URL(window.location.pathname || '/', window.location.origin);
+  Object.entries(query).forEach(([key, value]) => { if (value) url.searchParams.set(key, value); });
+  return url.toString();
+};
+const buildWalletSetupUrl = (preferredBaseUrl = '') => {
+  const returnTo = buildComposerUrl({ wallet_setup: 'success' });
+  const fallbackRegisterUrl = buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH);
+  const resolvedPreferred = resolvePaymentUiUrl(preferredBaseUrl);
+  const url = new URL(resolvedPreferred || fallbackRegisterUrl);
+  url.searchParams.set('return_to', returnTo);
+  url.searchParams.set('return_url', returnTo);
+  url.searchParams.set('returnUrl', returnTo);
+  return url.toString();
+};
 const createAuthState = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const getPendingAuthStates = () => {
@@ -32,7 +57,7 @@ const getPendingAuthStates = () => {
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return parsed.map((item) => String(item || '').trim()).filter(Boolean);
-  } catch (_) {}
+  } catch (_) { }
   const legacy = String(raw).trim();
   return legacy ? [legacy] : [];
 };
@@ -87,6 +112,40 @@ const extractErrorDetailObject = (error) => {
   const detail = error?.response?.data?.detail;
   return (detail && typeof detail === 'object' && !Array.isArray(detail)) ? detail : null;
 };
+const normalizePaymentAccountPayload = (input) => {
+  if (!input || typeof input !== 'object') return null;
+  if (
+    Object.prototype.hasOwnProperty.call(input, 'exists') ||
+    Object.prototype.hasOwnProperty.call(input, 'customer') ||
+    Object.prototype.hasOwnProperty.call(input, 'customer_id') ||
+    Object.prototype.hasOwnProperty.call(input, 'wallet_id')
+  ) {
+    return input;
+  }
+  const nestedKeys = ['data', 'result', 'account', 'payment_account', 'payload'];
+  for (const key of nestedKeys) {
+    const candidate = normalizePaymentAccountPayload(input[key]);
+    if (candidate) return candidate;
+  }
+  return input;
+};
+const hasWalletConfigured = (account) => {
+  if (!account || typeof account !== 'object') return false;
+  const existsValue = account?.exists;
+  if (typeof existsValue === 'boolean') return existsValue;
+  if (typeof existsValue === 'number') return existsValue > 0;
+  if (typeof existsValue === 'string') {
+    const normalized = existsValue.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', ''].includes(normalized)) return false;
+  }
+  return Boolean(
+    account?.customer?.id ||
+    account?.customer_id ||
+    account?.wallet_id ||
+    account?.id
+  );
+};
 
 // ─── Event banner gradient palette ─────────────────────────────────────────
 const BANNER_GRADIENTS = [
@@ -106,19 +165,19 @@ const getBannerGradient = (seed) => {
 // ─── Icons ──────────────────────────────────────────────────────────────────
 const IconPin = () => (
   <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-    <path d="M8 1a4 4 0 1 0 0 8A4 4 0 0 0 8 1zM6 5a2 2 0 1 1 4 0 2 2 0 0 1-4 0zm2 4.5c-3 0-5 1.3-5 2.5v.5h10v-.5c0-1.2-2-2.5-5-2.5z"/>
+    <path d="M8 1a4 4 0 1 0 0 8A4 4 0 0 0 8 1zM6 5a2 2 0 1 1 4 0 2 2 0 0 1-4 0zm2 4.5c-3 0-5 1.3-5 2.5v.5h10v-.5c0-1.2-2-2.5-5-2.5z" />
   </svg>
 );
 
 const IconCal = () => (
   <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-    <path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1H14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1.5V.5a.5.5 0 0 1 .5-.5zM1 6v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6H1z"/>
+    <path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1H14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1.5V.5a.5.5 0 0 1 .5-.5zM1 6v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6H1z" />
   </svg>
 );
 
 const IconCart = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-    <path d="M0 1a1 1 0 0 1 1-1h1.4a1 1 0 0 1 .98.804L3.6 2H15a1 1 0 0 1 .97 1.242l-1.2 5A1 1 0 0 1 13.8 9H4a1 1 0 0 1-.98-.804L1.63 1H1a1 1 0 0 1-1-1zm4.2 10a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2zm7.2 0a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z"/>
+    <path d="M0 1a1 1 0 0 1 1-1h1.4a1 1 0 0 1 .98.804L3.6 2H15a1 1 0 0 1 .97 1.242l-1.2 5A1 1 0 0 1 13.8 9H4a1 1 0 0 1-.98-.804L1.63 1H1a1 1 0 0 1-1-1zm4.2 10a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2zm7.2 0a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z" />
   </svg>
 );
 
@@ -145,6 +204,7 @@ function App() {
   const [flowInfo, setFlowInfo] = useState('');
   const [walletActionUrl, setWalletActionUrl] = useState('');
   const [eventsError, setEventsError] = useState('');
+  const [mainView, setMainView] = useState('events');
   const [activeTab, setActiveTab] = useState('orders');
   const [toast, setToast] = useState(null);
   const [checkoutLoadingEventId, setCheckoutLoadingEventId] = useState('');
@@ -311,6 +371,55 @@ function App() {
     window.history.replaceState({}, document.title, `${window.location.origin}${window.location.pathname}`);
   }, [token]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('wallet_setup') !== 'success') return;
+    if (!token) return;
+
+    let cancelled = false;
+    const finalizeWalletSetup = async () => {
+      setPaymentAccountSetupLoading(true);
+      setPaymentAccountError('');
+      setFlowInfo('Confirming your wallet setup...');
+      try {
+        const res = await axios.post(
+          `${API_BASE_URL}/api/payment-account/setup`,
+          {},
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (cancelled) return;
+        const nextAccount = {
+          exists: true,
+          customer: res.data?.customer || paymentAccount?.customer || null,
+          identity_email: user?.email || paymentAccount?.identity_email || '',
+        };
+        setPaymentAccount(nextAccount);
+        setWalletActionUrl(buildPaymentUiUrl(PAYMENT_UI_DASHBOARD_PATH));
+        setMainView('account');
+        setToast({
+          type: 'success',
+          text: res.data?.created === false
+            ? 'Wallet already configured. You can open it now.'
+            : 'Wallet configured successfully! You can now buy tickets.',
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setPaymentAccountError(extractErrorMessage(error, 'Could not confirm wallet setup'));
+        setToast({ type: 'warning', text: 'Returned from the wallet page, but the wallet is not ready yet.' });
+        fetchPaymentAccount(token);
+      } finally {
+        if (cancelled) return;
+        setPaymentAccountSetupLoading(false);
+        setFlowInfo('');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.history.replaceState({}, document.title, `${window.location.origin}${window.location.pathname}`);
+      }
+    };
+
+    finalizeWalletSetup();
+    return () => { cancelled = true; };
+  }, [token]);
+
   const fetchEvents = () => {
     setLoadingEvents(true);
     setEventsError('');
@@ -356,11 +465,12 @@ function App() {
           { headers: { Authorization: `Bearer ${token}` }, withCredentials: true }
         );
       }
-    } catch (_) {}
+    } catch (_) { }
     finally {
       clearPendingAuthStates();
       setToken(null);
       setUser(null);
+      setMainView('events');
       setPayments([]);
       setPaymentAccount(null);
       setPaymentAccountError('');
@@ -420,19 +530,34 @@ function App() {
     }
   };
 
-  const fetchPaymentAccount = async (activeToken = token) => {
+  const fetchPaymentAccount = async (activeToken = token, allowRetry = true) => {
     if (!activeToken) return;
     setPaymentAccountLoading(true);
     setPaymentAccountError('');
     try {
       const res = await axios.get(`${API_BASE_URL}/api/payment-account`, { headers: { Authorization: `Bearer ${activeToken}` } });
-      setPaymentAccount(res.data || null);
-      if (res.data?.exists) {
+      const payload = normalizePaymentAccountPayload(res.data);
+      const walletExists = hasWalletConfigured(payload);
+      setPaymentAccount(payload ? { ...payload, exists: walletExists } : null);
+      if (walletExists) {
         setWalletActionUrl(buildPaymentUiUrl(PAYMENT_UI_DASHBOARD_PATH));
       } else {
         setWalletActionUrl(buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH));
       }
     } catch (error) {
+      const statusCode = error?.response?.status;
+      if (allowRetry && (statusCode === 401 || statusCode === 403)) {
+        try {
+          const restoredToken = await refreshAccessToken();
+          if (restoredToken) {
+            setToken(restoredToken);
+            await fetchPaymentAccount(restoredToken, false);
+            return;
+          }
+        } catch (_) {
+          // Ignore refresh errors and surface the original wallet status error below.
+        }
+      }
       setPaymentAccount(null);
       setPaymentAccountError(extractErrorMessage(error, 'Could not load wallet status'));
     } finally {
@@ -442,10 +567,18 @@ function App() {
 
   const setupPaymentAccount = async () => {
     if (!token) { setAuthError('Please sign in before setting up a wallet.'); return; }
-    const registerUrl = buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH);
-    setWalletActionUrl(registerUrl);
+    setPaymentAccountSetupLoading(true);
+    setPaymentAccountError('');
     setFlowInfo('Redirecting to wallet setup...');
-    window.location.href = registerUrl;
+    try {
+      const registerUrl = buildWalletSetupUrl(walletActionUrl || buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH));
+      window.location.assign(registerUrl);
+    } catch (error) {
+      setPaymentAccountSetupLoading(false);
+      setFlowInfo('');
+      setPaymentAccountError(extractErrorMessage(error, 'Could not open wallet setup'));
+      setToast({ type: 'error', text: extractErrorMessage(error, 'Could not open wallet setup') });
+    }
   };
 
   const reserveTickets = async (eventId, qty) => {
@@ -659,6 +792,7 @@ function App() {
   const moveWishlistItemToCart = (item) => {
     addToCart({ id: item.event_id, name: item.name });
     removeWishlistItem(item.event_id);
+    setMainView('cart');
   };
 
   const setCartItemQuantity = (eventId, quantity) => {
@@ -755,6 +889,7 @@ function App() {
 
   const triggerRefund = (paymentId) => {
     setRefundPaymentId(paymentId);
+    setMainView('account');
     setActiveTab('refunds');
   };
 
@@ -785,6 +920,7 @@ function App() {
   };
 
   const paymentItems = payments || [];
+  const walletExists = hasWalletConfigured(paymentAccount);
   const cartItems = Object.values(cartByEvent || {});
   const wishlistItems = Object.values(wishlistByEvent || {});
   const cartTicketCount = cartItems.reduce((sum, item) => sum + Number(item?.quantity || 0), 0);
@@ -796,6 +932,13 @@ function App() {
   const cartTotalLabel = `€${(cartTotalCents / 100).toFixed(2)}`;
   const firstName = (user?.full_name || user?.email || '').split(/[\s@]/)[0] || 'there';
   const initials = firstName.slice(0, 2).toUpperCase();
+  const visibleMainView = mainView === 'account' && !token ? 'events' : mainView;
+  const mainViewTabs = [
+    { id: 'events', label: 'Events', note: events.length > 0 ? `${events.length} live now` : 'Browse the lineup' },
+    { id: 'wishlist', label: 'Wishlist', note: wishlistCount > 0 ? 'Saved for later' : 'Keep favorites here', count: wishlistCount || null },
+    { id: 'cart', label: 'Cart', note: cartTicketCount > 0 ? cartTotalLabel : 'Review your picks', count: cartTicketCount || null },
+    ...(token ? [{ id: 'account', label: 'Account', note: walletExists ? 'Orders and wallet ready' : 'Profile and settings' }] : []),
+  ];
   const managerEventChoices = events
     .filter((ev) => ev?.id)
     .map((ev) => ({ id: String(ev.id), label: `${ev.name || 'Unnamed event'} (${String(ev.id).slice(0, 8)}...)` }));
@@ -810,7 +953,7 @@ function App() {
         <div className="nav-right">
           <button
             className="btn btn-ghost btn-sm cart-nav-btn"
-            onClick={() => document.getElementById('wishlist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            onClick={() => setMainView('wishlist')}
             type="button"
           >
             <IconHeart />
@@ -819,7 +962,7 @@ function App() {
           </button>
           <button
             className="btn btn-ghost btn-sm cart-nav-btn"
-            onClick={() => document.getElementById('cart')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            onClick={() => setMainView('cart')}
             type="button"
           >
             <IconCart />
@@ -888,10 +1031,31 @@ function App() {
           </div>
         </section>
 
+        <section className="workspace-shell reveal">
+          <div className="workspace-nav" role="tablist" aria-label="Main sections">
+            {mainViewTabs.map((tab) => (
+              <button
+                key={tab.id}
+                className={`workspace-tab ${visibleMainView === tab.id ? 'active' : ''}`}
+                onClick={() => setMainView(tab.id)}
+                type="button"
+                role="tab"
+                aria-selected={visibleMainView === tab.id}
+              >
+                <span className="workspace-tab-copy">
+                  <span className="workspace-tab-label">{tab.label}</span>
+                  <span className="workspace-tab-note">{tab.note}</span>
+                </span>
+                {tab.count ? <span className="workspace-tab-count">{tab.count}</span> : null}
+              </button>
+            ))}
+          </div>
+        </section>
+
 
 
         {/* ── EVENTS ──────────────────────────── */}
-        <section className="events-section" id="events">
+        <section className="events-section view-panel" id="events" style={{ display: visibleMainView === 'events' ? 'block' : 'none' }}>
           <div className="section-header">
             <div>
               <h2>What's On 🔥</h2>
@@ -1011,7 +1175,7 @@ function App() {
         </section>
 
         {/* ── WISHLIST ───────────────────────── */}
-        <section className="wishlist-section" id="wishlist">
+        <section className="wishlist-section view-panel" id="wishlist" style={{ display: visibleMainView === 'wishlist' ? 'block' : 'none' }}>
           <div className="section-header">
             <div>
               <h2>Your Wishlist ♡</h2>
@@ -1059,9 +1223,10 @@ function App() {
         </section>
 
         {/* ── CART ───────────────────────────── */}
-        <section className="cart-section" id="cart">
+        <section className="cart-section view-panel" id="cart" style={{ display: visibleMainView === 'cart' ? 'block' : 'none' }}>
           <div className="section-header">
             <div>
+              <br></br>
               <h2>Your Cart 🛒</h2>
               <p>{cartTicketCount > 0 ? `${cartTicketCount} ticket(s) selected` : 'Add events to start your checkout'}</p>
             </div>
@@ -1112,7 +1277,8 @@ function App() {
 
         {/* ── ACCOUNT (logged in) ──────────────── */}
         {token && (
-          <section className="account-section reveal">
+          <section className="account-section reveal view-panel" style={{ display: visibleMainView === 'account' ? 'block' : 'none' }}>
+            <br></br>
             <div className="section-header">
               <div><h2>My Account</h2></div>
             </div>
@@ -1150,13 +1316,15 @@ function App() {
 
                 <div className="account-card">
                   <h3>Payment Wallet</h3>
-                  <div className={`wallet-status ${!paymentAccount?.exists ? 'wallet-not-ready' : ''}`}>
+                  <div className={`wallet-status ${!walletExists && !paymentAccountLoading ? 'wallet-not-ready' : ''}`}>
                     <div className="wallet-status-text">
-                      <p>{paymentAccountLoading ? 'Checking…' : paymentAccount?.exists ? '✓ Wallet active' : 'Wallet not set up'}</p>
-                      <small>{paymentAccount?.exists ? 'Ready for checkout' : 'Set up your wallet at APalPay to buy tickets'}</small>
+                      <p>{paymentAccountLoading ? 'Checking…' : walletExists ? '✓ Wallet active' : 'Wallet not set up'}</p>
+                      <small>{walletExists ? 'Ready for checkout' : 'Set up your wallet at APalPay to buy tickets'}</small>
                     </div>
-                    {paymentAccount?.exists && walletActionUrl && (
-                      <a className="btn btn-ghost btn-sm" href={walletActionUrl}>Open wallet →</a>
+                    {!walletExists && !paymentAccountLoading && (
+                      <button className="btn btn-primary btn-sm" onClick={setupPaymentAccount} disabled={paymentAccountSetupLoading}>
+                        {paymentAccountSetupLoading ? 'Setting up...' : 'Set up Wallet'}
+                      </button>
                     )}
                   </div>
                   {paymentAccountError && <p className="error-msg" style={{ marginTop: '0.5rem' }}>{paymentAccountError}</p>}

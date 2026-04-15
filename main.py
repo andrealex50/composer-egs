@@ -623,11 +623,27 @@ async def auth_browser_exchange(payload: BrowserHandoffExchangeRequest, request:
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/events", summary="Listar eventos", tags=["Events"])
-async def list_events(request: Request):
-    # Passa todos os query params para o Inventory (skip, limit, status, search, etc.)
+async def list_events(request: Request, authorization: Optional[str] = Header(None)):
+    params = dict(request.query_params)
+    is_admin = False
+    
+    if authorization:
+        try:
+            token = _extract_bearer_token(authorization)
+            if token:
+                claims = await _verify_user_token(token, request)
+                role = str(claims.get("role") or "").lower()
+                if role in EVENT_ADMIN_ROLES:
+                    is_admin = True
+        except Exception:
+            pass
+
+    if not is_admin:
+        params["status"] = "published"
+
     return await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events",
                         headers=_inv_headers(request=request),
-                        params=dict(request.query_params),
+                        params=params,
                         service_label="Inventory Service",
                         request=request)
 
