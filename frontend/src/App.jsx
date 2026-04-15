@@ -672,6 +672,8 @@ function App() {
               {events.slice(0, 9).map((ev) => {
                 const qty = quantityByEvent[ev.id] || 1;
                 const buyingThis = checkoutLoadingEventId === ev.id;
+                const eventStatus = String(ev.status || '').toLowerCase();
+                const isBuyableEvent = eventStatus === 'published';
                 return (
                   <article key={ev.id} className="event-card">
                     <div className="event-card-banner">
@@ -727,8 +729,8 @@ function App() {
                           <button
                             className="btn btn-primary btn-sm"
                             onClick={() => handleCheckout(ev.id)}
-                            disabled={!token || buyingThis}
-                            title={!token ? 'Sign in to buy' : undefined}
+                            disabled={!token || buyingThis || !isBuyableEvent}
+                            title={!token ? 'Sign in to buy' : (!isBuyableEvent ? `Event status: ${eventStatus || 'unknown'} (not purchasable)` : undefined)}
                           >
                             {buyingThis ? '…' : token ? 'Buy' : '🔒'}
                           </button>

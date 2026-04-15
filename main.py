@@ -784,6 +784,19 @@ async def create_reservation(request: Request, authorization: Optional[str] = He
     inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
+        event_resp = await client.get(
+            f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}",
+            headers=inv_headers,
+        )
+        if event_resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="Evento não encontrado")
+        if event_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Erro no Inventory Service")
+
+        event_status = str(event_resp.json().get("status") or "").lower()
+        if event_status != "published":
+            raise HTTPException(status_code=409, detail=f"Evento indisponível para compra (status: {event_status or 'desconhecido'})")
+
         # Procurar bilhetes disponíveis
         res = await client.get(
             f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}/tickets",
@@ -1019,6 +1032,22 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         user_email = user_data["_normalized_email"]
         if not user_email:
             raise HTTPException(status_code=401, detail="Sessão inválida: email em falta")
+
+        event_resp = await client.get(
+            f"{INVENTORY_SERVICE_URL}/api/v1/events/{order.event_id}",
+            headers=_inv_headers(authorization, request=request),
+        )
+        if event_resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="Evento não encontrado")
+        if event_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Erro Inventory")
+
+        event_status = str(event_resp.json().get("status") or "").lower()
+        if event_status != "published":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Evento indisponível para compra (status: {event_status or 'desconhecido'})",
+            )
 
         # 2. Reservar bilhetes no Inventory Service
         inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
