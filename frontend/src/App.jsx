@@ -13,8 +13,10 @@ const PAYMENT_UI_REGISTER_PATH = import.meta.env.VITE_PAYMENT_UI_REGISTER_PATH |
 const PAYMENT_UI_DASHBOARD_PATH = import.meta.env.VITE_PAYMENT_UI_DASHBOARD_PATH || '/wallet/dashboard';
 const AUTH_STATE_STORAGE_KEY = 'flashsale_auth_state';
 const AUTH_EXCHANGE_PROMISE_KEY = '__flashsaleAuthExchangePromise';
-const CART_STORAGE_KEY = 'flashsale_cart_v1';
-const WISHLIST_STORAGE_KEY = 'flashsale_wishlist_v1';
+const CART_STORAGE_BY_USER_KEY = 'flashsale_cart_by_user_v1';
+const WISHLIST_STORAGE_BY_USER_KEY = 'flashsale_wishlist_by_user_v1';
+const LEGACY_CART_STORAGE_KEY = 'flashsale_cart_v1';
+const LEGACY_WISHLIST_STORAGE_KEY = 'flashsale_wishlist_v1';
 const PENDING_CHECKOUT_STORAGE_KEY = 'flashsale_pending_checkout';
 
 const buildAuthUiUrl = (path, query = {}) => {
@@ -88,6 +90,25 @@ const extractErrorDetailObject = (error) => {
   return (detail && typeof detail === 'object' && !Array.isArray(detail)) ? detail : null;
 };
 
+const parseObjectStorage = (key) => {
+  const raw = localStorage.getItem(key);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+};
+
+const deriveAccountStorageKey = (user) => {
+  const userId = String(user?.id || '').trim();
+  if (userId) return `uid:${userId}`;
+  const email = String(user?.email || '').trim().toLowerCase();
+  if (email) return `email:${email}`;
+  return '';
+};
+
 // ─── Event banner gradient palette ─────────────────────────────────────────
 const BANNER_GRADIENTS = [
   'linear-gradient(135deg, #0a2040 0%, #0d3b2a 100%)',
@@ -149,27 +170,10 @@ function App() {
   const [toast, setToast] = useState(null);
   const [checkoutLoadingEventId, setCheckoutLoadingEventId] = useState('');
   const [quantityByEvent, setQuantityByEvent] = useState({});
-  const [cartByEvent, setCartByEvent] = useState(() => {
-    const raw = localStorage.getItem(CART_STORAGE_KEY);
-    if (!raw) return {};
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (_) {
-      return {};
-    }
-  });
+  const [cartByEvent, setCartByEvent] = useState({});
   const [cartCheckoutLoading, setCartCheckoutLoading] = useState(false);
-  const [wishlistByEvent, setWishlistByEvent] = useState(() => {
-    const raw = localStorage.getItem(WISHLIST_STORAGE_KEY);
-    if (!raw) return {};
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (_) {
-      return {};
-    }
-  });
+  const [wishlistByEvent, setWishlistByEvent] = useState({});
+  const [accountCollectionsReady, setAccountCollectionsReady] = useState(false);
   const [authRedirectLoading, setAuthRedirectLoading] = useState(false);
 
   const [reservationEventId, setReservationEventId] = useState('');
@@ -206,6 +210,7 @@ function App() {
   const [managerLoading, setManagerLoading] = useState(false);
 
   const isPrivilegedUser = ['admin', 'promoter'].includes(String(user?.role || '').toLowerCase());
+  const accountStorageKey = deriveAccountStorageKey(user);
 
   useEffect(() => { fetchEvents(); }, []);
 
@@ -285,12 +290,44 @@ function App() {
   }, [toast]);
 
   useEffect(() => {
-    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartByEvent || {}));
-  }, [cartByEvent]);
+    if (!token || !accountStorageKey) {
+      setCartByEvent({});
+      setWishlistByEvent({});
+      setAccountCollectionsReady(false);
+      return;
+    }
+
+    const cartByUser = parseObjectStorage(CART_STORAGE_BY_USER_KEY);
+    const wishlistByUser = parseObjectStorage(WISHLIST_STORAGE_BY_USER_KEY);
+
+    const legacyCart = parseObjectStorage(LEGACY_CART_STORAGE_KEY);
+    const legacyWishlist = parseObjectStorage(LEGACY_WISHLIST_STORAGE_KEY);
+
+    const nextCart = cartByUser[accountStorageKey] && typeof cartByUser[accountStorageKey] === 'object'
+      ? cartByUser[accountStorageKey]
+      : legacyCart;
+    const nextWishlist = wishlistByUser[accountStorageKey] && typeof wishlistByUser[accountStorageKey] === 'object'
+      ? wishlistByUser[accountStorageKey]
+      : legacyWishlist;
+
+    setCartByEvent(nextCart && typeof nextCart === 'object' ? nextCart : {});
+    setWishlistByEvent(nextWishlist && typeof nextWishlist === 'object' ? nextWishlist : {});
+    setAccountCollectionsReady(true);
+  }, [token, accountStorageKey]);
 
   useEffect(() => {
-    localStorage.setItem(WISHLIST_STORAGE_KEY, JSON.stringify(wishlistByEvent || {}));
-  }, [wishlistByEvent]);
+    if (!token || !accountStorageKey || !accountCollectionsReady) return;
+    const byUser = parseObjectStorage(CART_STORAGE_BY_USER_KEY);
+    byUser[accountStorageKey] = cartByEvent && typeof cartByEvent === 'object' ? cartByEvent : {};
+    localStorage.setItem(CART_STORAGE_BY_USER_KEY, JSON.stringify(byUser));
+  }, [cartByEvent, token, accountStorageKey, accountCollectionsReady]);
+
+  useEffect(() => {
+    if (!token || !accountStorageKey || !accountCollectionsReady) return;
+    const byUser = parseObjectStorage(WISHLIST_STORAGE_BY_USER_KEY);
+    byUser[accountStorageKey] = wishlistByEvent && typeof wishlistByEvent === 'object' ? wishlistByEvent : {};
+    localStorage.setItem(WISHLIST_STORAGE_BY_USER_KEY, JSON.stringify(byUser));
+  }, [wishlistByEvent, token, accountStorageKey, accountCollectionsReady]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -361,6 +398,9 @@ function App() {
       clearPendingAuthStates();
       setToken(null);
       setUser(null);
+      setCartByEvent({});
+      setWishlistByEvent({});
+      setAccountCollectionsReady(false);
       setPayments([]);
       setPaymentAccount(null);
       setPaymentAccountError('');
@@ -604,6 +644,10 @@ function App() {
   };
 
   const addToCart = (eventObj) => {
+    if (!token) {
+      setAuthError('Please sign in to add items to your cart.');
+      return;
+    }
     const eventId = String(eventObj?.id || '').trim();
     if (!eventId) return;
     const qtyToAdd = Number(quantityByEvent[eventId] || 1);
@@ -626,6 +670,10 @@ function App() {
   };
 
   const toggleWishlist = (eventObj) => {
+    if (!token) {
+      setAuthError('Please sign in to save wishlist items.');
+      return;
+    }
     const eventId = String(eventObj?.id || '').trim();
     if (!eventId) return;
     setWishlistByEvent((prev) => {
@@ -808,24 +856,28 @@ function App() {
           ⚡ FlashSale
         </div>
         <div className="nav-right">
-          <button
-            className="btn btn-ghost btn-sm cart-nav-btn"
-            onClick={() => document.getElementById('wishlist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            type="button"
-          >
-            <IconHeart />
-            Wishlist
-            {wishlistCount > 0 && <span className="nav-cart-count">{wishlistCount}</span>}
-          </button>
-          <button
-            className="btn btn-ghost btn-sm cart-nav-btn"
-            onClick={() => document.getElementById('cart')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            type="button"
-          >
-            <IconCart />
-            Cart
-            {cartTicketCount > 0 && <span className="nav-cart-count">{cartTicketCount}</span>}
-          </button>
+          {token && (
+            <>
+              <button
+                className="btn btn-ghost btn-sm cart-nav-btn"
+                onClick={() => document.getElementById('wishlist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                type="button"
+              >
+                <IconHeart />
+                Wishlist
+                {wishlistCount > 0 && <span className="nav-cart-count">{wishlistCount}</span>}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm cart-nav-btn"
+                onClick={() => document.getElementById('cart')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                type="button"
+              >
+                <IconCart />
+                Cart
+                {cartTicketCount > 0 && <span className="nav-cart-count">{cartTicketCount}</span>}
+              </button>
+            </>
+          )}
           {authError && <span className="error-msg" style={{ fontSize: '0.82rem', maxWidth: 260 }}>{authError}</span>}
           {token ? (
             <>
@@ -937,6 +989,7 @@ function App() {
                           className={`wishlist-toggle ${inWishlist ? 'active' : ''}`}
                           onClick={() => toggleWishlist(ev)}
                           type="button"
+                          disabled={!token}
                           title={inWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
                         >
                           <IconHeart filled={inWishlist} />
@@ -985,8 +1038,8 @@ function App() {
                           <button
                             className="btn btn-ghost btn-sm"
                             onClick={() => addToCart(ev)}
-                            disabled={!isBuyableEvent}
-                            title={!isBuyableEvent ? `Event status: ${eventStatus || 'unknown'} (not purchasable)` : 'Add selected quantity to cart'}
+                            disabled={!token || !isBuyableEvent}
+                            title={!token ? 'Sign in to add to cart' : (!isBuyableEvent ? `Event status: ${eventStatus || 'unknown'} (not purchasable)` : 'Add selected quantity to cart')}
                           >
                             Add
                           </button>
@@ -1011,6 +1064,7 @@ function App() {
         </section>
 
         {/* ── WISHLIST ───────────────────────── */}
+        {token && (
         <section className="wishlist-section" id="wishlist">
           <div className="section-header">
             <div>
@@ -1057,8 +1111,10 @@ function App() {
             </div>
           )}
         </section>
+        )}
 
         {/* ── CART ───────────────────────────── */}
+        {token && (
         <section className="cart-section" id="cart">
           <div className="section-header">
             <div>
@@ -1109,6 +1165,7 @@ function App() {
             </div>
           )}
         </section>
+        )}
 
         {/* ── ACCOUNT (logged in) ──────────────── */}
         {token && (
