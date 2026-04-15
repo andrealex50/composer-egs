@@ -93,6 +93,7 @@ Service     Service     Service
 | Método | Rota | Descrição |
 |--------|------|-----------|
 | POST | `/api/checkout` | Checkout hosted (reserva → cria sessão no Payment → redireciona para `/checkout/{session_id}`) |
+| POST | `/api/checkout/cart` | Checkout hosted do carrinho (reserva multi-evento → cria uma sessão única no Payment) |
 | GET | `/api/checkout/success` | Callback de sucesso do checkout hosted |
 | GET | `/api/checkout/cancel` | Callback de cancelamento com compensação das reservas |
 | POST | `/api/refund` | Reembolso completo (devolve → cancela reserva) |

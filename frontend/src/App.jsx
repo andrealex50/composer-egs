@@ -13,6 +13,9 @@ const PAYMENT_UI_REGISTER_PATH = import.meta.env.VITE_PAYMENT_UI_REGISTER_PATH |
 const PAYMENT_UI_DASHBOARD_PATH = import.meta.env.VITE_PAYMENT_UI_DASHBOARD_PATH || '/wallet/dashboard';
 const AUTH_STATE_STORAGE_KEY = 'flashsale_auth_state';
 const AUTH_EXCHANGE_PROMISE_KEY = '__flashsaleAuthExchangePromise';
+const CART_STORAGE_KEY = 'flashsale_cart_v1';
+const WISHLIST_STORAGE_KEY = 'flashsale_wishlist_v1';
+const PENDING_CHECKOUT_STORAGE_KEY = 'flashsale_pending_checkout';
 
 const buildAuthUiUrl = (path, query = {}) => {
   const url = new URL(path, AUTH_UI_BASE_URL);
@@ -113,6 +116,24 @@ const IconCal = () => (
   </svg>
 );
 
+const IconCart = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M0 1a1 1 0 0 1 1-1h1.4a1 1 0 0 1 .98.804L3.6 2H15a1 1 0 0 1 .97 1.242l-1.2 5A1 1 0 0 1 13.8 9H4a1 1 0 0 1-.98-.804L1.63 1H1a1 1 0 0 1-1-1zm4.2 10a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2zm7.2 0a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z"/>
+  </svg>
+);
+
+const IconHeart = ({ filled = false }) => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path
+      d="M8 14.2 2.3 8.7A3.7 3.7 0 0 1 7.6 3.5L8 4l.4-.5a3.7 3.7 0 0 1 5.3 5.2L8 14.2z"
+      fill={filled ? 'currentColor' : 'transparent'}
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 function App() {
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
@@ -128,6 +149,27 @@ function App() {
   const [toast, setToast] = useState(null);
   const [checkoutLoadingEventId, setCheckoutLoadingEventId] = useState('');
   const [quantityByEvent, setQuantityByEvent] = useState({});
+  const [cartByEvent, setCartByEvent] = useState(() => {
+    const raw = localStorage.getItem(CART_STORAGE_KEY);
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  });
+  const [cartCheckoutLoading, setCartCheckoutLoading] = useState(false);
+  const [wishlistByEvent, setWishlistByEvent] = useState(() => {
+    const raw = localStorage.getItem(WISHLIST_STORAGE_KEY);
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  });
   const [authRedirectLoading, setAuthRedirectLoading] = useState(false);
 
   const [reservationEventId, setReservationEventId] = useState('');
@@ -243,16 +285,29 @@ function App() {
   }, [toast]);
 
   useEffect(() => {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartByEvent || {}));
+  }, [cartByEvent]);
+
+  useEffect(() => {
+    localStorage.setItem(WISHLIST_STORAGE_KEY, JSON.stringify(wishlistByEvent || {}));
+  }, [wishlistByEvent]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const status = params.get('status');
     if (!status) return;
+    const pendingCheckout = localStorage.getItem(PENDING_CHECKOUT_STORAGE_KEY);
     if (status === 'success') {
       setFlowInfo('');
       setToast({ type: 'success', text: 'Payment completed! Check your orders.' });
+      if (pendingCheckout === 'cart') {
+        setCartByEvent({});
+      }
       if (token) fetchPayments(token);
     } else if (status === 'cancel') {
       setToast({ type: 'warning', text: 'Checkout cancelled. No payment was taken.' });
     }
+    localStorage.removeItem(PENDING_CHECKOUT_STORAGE_KEY);
     window.history.replaceState({}, document.title, `${window.location.origin}${window.location.pathname}`);
   }, [token]);
 
@@ -493,6 +548,7 @@ function App() {
       };
       const res = await axios.post(`${API_BASE_URL}/api/checkout`, payload, { headers: { Authorization: `Bearer ${token}` } });
       if (res.data?.checkout_url) {
+        localStorage.setItem(PENDING_CHECKOUT_STORAGE_KEY, 'single');
         window.location.href = res.data.checkout_url;
       } else {
         setToast({ type: 'warning', text: 'Checkout started, but no redirect URL was returned.' });
@@ -510,6 +566,135 @@ function App() {
       }
     } finally {
       setCheckoutLoadingEventId('');
+      setFlowInfo('');
+    }
+  };
+
+  const addToCart = (eventObj) => {
+    const eventId = String(eventObj?.id || '').trim();
+    if (!eventId) return;
+    const qtyToAdd = Number(quantityByEvent[eventId] || 1);
+    const normalizedQty = Number.isFinite(qtyToAdd) ? Math.max(1, Math.min(20, qtyToAdd)) : 1;
+    setCartByEvent((prev) => {
+      const existing = prev[eventId];
+      const nextQty = Math.max(1, Math.min(50, Number(existing?.quantity || 0) + normalizedQty));
+      return {
+        ...prev,
+        [eventId]: {
+          event_id: eventId,
+          name: eventObj?.name || existing?.name || 'Unnamed event',
+          quantity: nextQty,
+          amount_cents_per_ticket: Number(existing?.amount_cents_per_ticket || 1500),
+          currency: String(existing?.currency || 'EUR').toUpperCase(),
+        },
+      };
+    });
+    setToast({ type: 'success', text: `Added ${normalizedQty} ticket(s) to cart.` });
+  };
+
+  const toggleWishlist = (eventObj) => {
+    const eventId = String(eventObj?.id || '').trim();
+    if (!eventId) return;
+    setWishlistByEvent((prev) => {
+      if (prev[eventId]) {
+        const next = { ...prev };
+        delete next[eventId];
+        return next;
+      }
+      return {
+        ...prev,
+        [eventId]: {
+          event_id: eventId,
+          name: eventObj?.name || 'Unnamed event',
+          venue: eventObj?.venue || '',
+          date: eventObj?.date || '',
+          status: eventObj?.status || 'draft',
+        },
+      };
+    });
+  };
+
+  const removeWishlistItem = (eventId) => {
+    setWishlistByEvent((prev) => {
+      if (!prev[eventId]) return prev;
+      const next = { ...prev };
+      delete next[eventId];
+      return next;
+    });
+  };
+
+  const moveWishlistItemToCart = (item) => {
+    addToCart({ id: item.event_id, name: item.name });
+    removeWishlistItem(item.event_id);
+  };
+
+  const setCartItemQuantity = (eventId, quantity) => {
+    const normalized = Math.max(1, Math.min(50, Number(quantity) || 1));
+    setCartByEvent((prev) => {
+      if (!prev[eventId]) return prev;
+      return {
+        ...prev,
+        [eventId]: { ...prev[eventId], quantity: normalized },
+      };
+    });
+  };
+
+  const removeCartItem = (eventId) => {
+    setCartByEvent((prev) => {
+      if (!prev[eventId]) return prev;
+      const next = { ...prev };
+      delete next[eventId];
+      return next;
+    });
+  };
+
+  const handleCartCheckout = async () => {
+    if (!token) {
+      setAuthError('Please sign in to checkout your cart.');
+      return;
+    }
+
+    const items = Object.values(cartByEvent || {})
+      .map((entry) => ({
+        event_id: String(entry?.event_id || '').trim(),
+        quantity: Number(entry?.quantity || 0),
+      }))
+      .filter((entry) => entry.event_id && entry.quantity > 0);
+
+    if (!items.length) {
+      setToast({ type: 'warning', text: 'Your cart is empty.' });
+      return;
+    }
+
+    setCartCheckoutLoading(true);
+    setFlowInfo('Redirecting your cart to checkout...');
+    setWalletActionUrl('');
+    try {
+      const payload = {
+        items,
+        success_url: window.location.href.split('?')[0] + '?status=success',
+        cancel_url: window.location.href.split('?')[0] + '?status=cancel',
+      };
+      const res = await axios.post(`${API_BASE_URL}/api/checkout/cart`, payload, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.data?.checkout_url) {
+        localStorage.setItem(PENDING_CHECKOUT_STORAGE_KEY, 'cart');
+        window.location.href = res.data.checkout_url;
+      } else {
+        setToast({ type: 'warning', text: 'Cart checkout started, but no redirect URL was returned.' });
+      }
+    } catch (error) {
+      const detailObject = extractErrorDetailObject(error);
+      if (detailObject?.code === 'wallet_setup_required') {
+        const guidance = detailObject?.message || 'Wallet setup required before checkout.';
+        setFlowInfo(guidance);
+        setWalletActionUrl(detailObject?.wallet_register_url || detailObject?.action_url || buildPaymentUiUrl(PAYMENT_UI_REGISTER_PATH));
+        setPaymentAccount({ exists: false, customer: null, identity_email: user?.email || '' });
+        setToast({ type: 'warning', text: guidance });
+      } else {
+        setToast({ type: 'error', text: 'Cart checkout error: ' + extractErrorMessage(error) });
+      }
+    } finally {
+      setCartCheckoutLoading(false);
       setFlowInfo('');
     }
   };
@@ -567,6 +752,15 @@ function App() {
   };
 
   const paymentItems = payments || [];
+  const cartItems = Object.values(cartByEvent || {});
+  const wishlistItems = Object.values(wishlistByEvent || {});
+  const cartTicketCount = cartItems.reduce((sum, item) => sum + Number(item?.quantity || 0), 0);
+  const wishlistCount = wishlistItems.length;
+  const cartTotalCents = cartItems.reduce(
+    (sum, item) => sum + (Number(item?.quantity || 0) * Number(item?.amount_cents_per_ticket || 0)),
+    0,
+  );
+  const cartTotalLabel = `€${(cartTotalCents / 100).toFixed(2)}`;
   const firstName = (user?.full_name || user?.email || '').split(/[\s@]/)[0] || 'there';
   const initials = firstName.slice(0, 2).toUpperCase();
   const managerEventChoices = events
@@ -581,6 +775,24 @@ function App() {
           ⚡ FlashSale
         </div>
         <div className="nav-right">
+          <button
+            className="btn btn-ghost btn-sm cart-nav-btn"
+            onClick={() => document.getElementById('wishlist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            type="button"
+          >
+            <IconHeart />
+            Wishlist
+            {wishlistCount > 0 && <span className="nav-cart-count">{wishlistCount}</span>}
+          </button>
+          <button
+            className="btn btn-ghost btn-sm cart-nav-btn"
+            onClick={() => document.getElementById('cart')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            type="button"
+          >
+            <IconCart />
+            Cart
+            {cartTicketCount > 0 && <span className="nav-cart-count">{cartTicketCount}</span>}
+          </button>
           {authError && <span className="error-msg" style={{ fontSize: '0.82rem', maxWidth: 260 }}>{authError}</span>}
           {token ? (
             <>
@@ -674,6 +886,7 @@ function App() {
                 const buyingThis = checkoutLoadingEventId === ev.id;
                 const eventStatus = String(ev.status || '').toLowerCase();
                 const isBuyableEvent = eventStatus === 'published';
+                const inWishlist = Boolean(wishlistByEvent[ev.id]);
                 return (
                   <article key={ev.id} className="event-card">
                     <div className="event-card-banner">
@@ -685,7 +898,17 @@ function App() {
                     </div>
 
                     <div className="event-card-body">
-                      <div className="event-card-title">{ev.name || 'Unnamed Event'}</div>
+                      <div className="event-card-title-row">
+                        <div className="event-card-title">{ev.name || 'Unnamed Event'}</div>
+                        <button
+                          className={`wishlist-toggle ${inWishlist ? 'active' : ''}`}
+                          onClick={() => toggleWishlist(ev)}
+                          type="button"
+                          title={inWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
+                        >
+                          <IconHeart filled={inWishlist} />
+                        </button>
+                      </div>
                       {ev.description && <p className="event-card-desc">{ev.description}</p>}
 
                       <div className="event-card-meta">
@@ -727,6 +950,14 @@ function App() {
                             <button onClick={() => stepQty(ev.id, +1)}>+</button>
                           </div>
                           <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => addToCart(ev)}
+                            disabled={!isBuyableEvent}
+                            title={!isBuyableEvent ? `Event status: ${eventStatus || 'unknown'} (not purchasable)` : 'Add selected quantity to cart'}
+                          >
+                            Add
+                          </button>
+                          <button
                             className="btn btn-primary btn-sm"
                             onClick={() => handleCheckout(ev.id)}
                             disabled={!token || buyingThis || !isBuyableEvent}
@@ -744,6 +975,106 @@ function App() {
           )}
 
 
+        </section>
+
+        {/* ── WISHLIST ───────────────────────── */}
+        <section className="wishlist-section" id="wishlist">
+          <div className="section-header">
+            <div>
+              <h2>Your Wishlist ♡</h2>
+              <p>{wishlistCount > 0 ? `${wishlistCount} saved event(s)` : 'Save events and come back later'}</p>
+            </div>
+          </div>
+
+          {wishlistItems.length === 0 ? (
+            <div className="empty-state empty-state-card">
+              <div className="empty-state-emoji">💫</div>
+              <p className="empty-state-title">No wishlist items yet</p>
+              <p>Tap the heart on an event card to save it.</p>
+            </div>
+          ) : (
+            <div className="wishlist-list">
+              {wishlistItems.map((item) => {
+                const itemStatus = String(item?.status || '').toLowerCase();
+                const canMoveToCart = itemStatus === 'published';
+                return (
+                  <div className="wishlist-item" key={item.event_id}>
+                    <div className="wishlist-item-main">
+                      <div className="wishlist-item-title">{item.name || 'Unnamed event'}</div>
+                      <div className="wishlist-item-meta">
+                        {item.venue ? `${item.venue} · ` : ''}
+                        {formatDate(item.date)}
+                      </div>
+                    </div>
+                    <div className="wishlist-item-actions">
+                      <span className={statusClass(item.status)}>{item.status || 'draft'}</span>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => moveWishlistItemToCart(item)}
+                        disabled={!canMoveToCart}
+                        title={!canMoveToCart ? `Event status: ${itemStatus || 'unknown'} (not purchasable)` : 'Move to cart'}
+                      >
+                        Move to Cart
+                      </button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => removeWishlistItem(item.event_id)}>Remove</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* ── CART ───────────────────────────── */}
+        <section className="cart-section" id="cart">
+          <div className="section-header">
+            <div>
+              <h2>Your Cart 🛒</h2>
+              <p>{cartTicketCount > 0 ? `${cartTicketCount} ticket(s) selected` : 'Add events to start your checkout'}</p>
+            </div>
+          </div>
+
+          {cartItems.length === 0 ? (
+            <div className="empty-state empty-state-card">
+              <div className="empty-state-emoji">🧺</div>
+              <p className="empty-state-title">Your cart is empty</p>
+              <p>Pick an event and click Add to Cart to build your order.</p>
+            </div>
+          ) : (
+            <div className="cart-card">
+              <div className="cart-list">
+                {cartItems.map((item) => {
+                  const lineTotal = Number(item.quantity || 0) * Number(item.amount_cents_per_ticket || 0);
+                  return (
+                    <div className="cart-item" key={item.event_id}>
+                      <div className="cart-item-main">
+                        <div className="cart-item-title">{item.name || 'Unnamed event'}</div>
+                        <div className="cart-item-meta">Event ID: {item.event_id?.slice(0, 8)}…</div>
+                      </div>
+                      <div className="cart-item-actions">
+                        <div className="qty-stepper">
+                          <button onClick={() => setCartItemQuantity(item.event_id, Number(item.quantity || 1) - 1)}>−</button>
+                          <span>{item.quantity}</span>
+                          <button onClick={() => setCartItemQuantity(item.event_id, Number(item.quantity || 1) + 1)}>+</button>
+                        </div>
+                        <div className="cart-item-price">€{(lineTotal / 100).toFixed(2)}</div>
+                        <button className="btn btn-ghost btn-sm" onClick={() => removeCartItem(item.event_id)}>Remove</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="cart-footer">
+                <div className="cart-total">
+                  <span>Total</span>
+                  <strong>{cartTotalLabel}</strong>
+                </div>
+                <button className="btn btn-primary" onClick={handleCartCheckout} disabled={cartCheckoutLoading || !token}>
+                  {cartCheckoutLoading ? 'Redirecting…' : (token ? 'Proceed to Payment' : 'Sign in to checkout')}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* ── ACCOUNT (logged in) ──────────────── */}

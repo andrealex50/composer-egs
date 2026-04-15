@@ -1,6 +1,7 @@
 import os
 import time
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 
 import httpx
 import urllib.parse
@@ -8,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Header, Request, Response, status
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 # ---------------------------------------------------------------------------
 # Configuration via environment variables
@@ -428,6 +429,18 @@ class RefundRequest(BaseModel):
     payment_id: str
     ticket_ids: list[str] = []
     reason: Optional[str] = "requested_by_customer"
+
+
+class CartCheckoutItemRequest(BaseModel):
+    event_id: str
+    quantity: int = 1
+    ticket_category_id: Optional[str] = None
+
+
+class CartCheckoutRequest(BaseModel):
+    items: List[CartCheckoutItemRequest]
+    success_url: str
+    cancel_url: str
 
 
 class BrowserHandoffRequest(BaseModel):
@@ -1139,6 +1152,220 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         if isinstance(checkout_url, str) and checkout_url:
             payload["checkout_url"] = _append_query_params(checkout_url, {"force_auth": "1"})
 
+        return payload
+
+
+@app.post("/api/checkout/cart", summary="Iniciar Checkout do Carrinho (multi-evento)", tags=["Orchestration"])
+async def checkout_cart(request: Request, order: CartCheckoutRequest, authorization: Optional[str] = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Token em falta")
+    if not _extract_bearer_token(authorization):
+        raise HTTPException(status_code=401, detail="Token inválido")
+    if not order.items:
+        raise HTTPException(status_code=400, detail="Carrinho vazio")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        user_data = await _get_authenticated_user_profile(authorization, request)
+        user_email = user_data["_normalized_email"]
+        if not user_email:
+            raise HTTPException(status_code=401, detail="Sessão inválida: email em falta")
+
+        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
+        reserved_ticket_ids: list[str] = []
+        line_items: list[dict] = []
+        checkout_currency: str | None = None
+
+        for item in order.items:
+            if item.quantity < 1:
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(status_code=400, detail="Quantidade inválida no carrinho")
+
+            event_resp = await client.get(
+                f"{INVENTORY_SERVICE_URL}/api/v1/events/{item.event_id}",
+                headers=_inv_headers(authorization, request=request),
+            )
+            if event_resp.status_code == 404:
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(status_code=404, detail=f"Evento não encontrado: {item.event_id}")
+            if event_resp.status_code != 200:
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(status_code=500, detail="Erro Inventory")
+
+            event_status = str(event_resp.json().get("status") or "").lower()
+            if event_status != "published":
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Evento indisponível para compra (status: {event_status or 'desconhecido'})",
+                )
+
+            res = await client.get(
+                f"{INVENTORY_SERVICE_URL}/api/v1/events/{item.event_id}/tickets",
+                params={"status": "available", "limit": max(100, item.quantity * 2)},
+                headers=inv_headers,
+            )
+            if res.status_code != 200:
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(status_code=500, detail="Erro Inventory")
+
+            available = res.json().get("data", [])
+            if item.ticket_category_id:
+                available = [
+                    t for t in available
+                    if t.get("ticket_category_id") == item.ticket_category_id
+                    or t.get("category") == item.ticket_category_id
+                ]
+
+            if len(available) < item.quantity:
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(status_code=409, detail="Esgotado ou indisponível.")
+
+            item_reserved_tickets = []
+            for ticket in available[:item.quantity]:
+                reserve_resp = await client.put(
+                    f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket['id']}/reserve",
+                    headers=inv_headers,
+                )
+                if reserve_resp.status_code == 200:
+                    item_reserved_tickets.append(reserve_resp.json())
+
+            if len(item_reserved_tickets) < item.quantity:
+                for reserved in item_reserved_tickets:
+                    await _cancel_reserved_ticket(
+                        client,
+                        reserved["id"],
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(status_code=409, detail="Falha concorrência.")
+
+            sample_ticket = item_reserved_tickets[0]
+            unit_price_value = Decimal(str(sample_ticket.get("price", "15.00")))
+            unit_price_cents = int((unit_price_value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            currency = str(sample_ticket.get("currency") or "eur").lower()
+
+            if checkout_currency is None:
+                checkout_currency = currency
+            elif checkout_currency != currency:
+                for reserved in item_reserved_tickets:
+                    await _cancel_reserved_ticket(
+                        client,
+                        reserved["id"],
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                for tid in reserved_ticket_ids:
+                    await _cancel_reserved_ticket(
+                        client,
+                        tid,
+                        inv_headers,
+                        service_label="Inventory Service",
+                    )
+                raise HTTPException(status_code=409, detail="Carrinho com moedas diferentes não é suportado")
+
+            reserved_ids = [t["id"] for t in item_reserved_tickets]
+            reserved_ticket_ids.extend(reserved_ids)
+
+            line_items.append(
+                {
+                    "name": f"Event {item.event_id} Tickets",
+                    "quantity": item.quantity,
+                    "price": unit_price_cents,
+                }
+            )
+
+        ticket_ids_str = ",".join(reserved_ticket_ids)
+        base_url = str(request.base_url).rstrip("/")
+        composer_success = f"{base_url}/api/checkout/success"
+
+        frontend_cancel_encoded = urllib.parse.quote(order.cancel_url)
+        composer_cancel = f"{base_url}/api/checkout/cancel?tickets={ticket_ids_str}&frontend_url={frontend_cancel_encoded}"
+
+        pay_payload = {
+            "line_items": line_items,
+            "currency": checkout_currency or "eur",
+            "success_url": composer_success,
+            "cancel_url": composer_cancel,
+            "metadata": {
+                "ticket_ids": ticket_ids_str,
+                "frontend_success_url": order.success_url,
+                "frontend_cancel_url": order.cancel_url,
+                "composer_initiator_email": user_data.get("email"),
+                "composer_initiator_auth_user_id": user_data.get("id"),
+                "checkout_mode": "cart",
+                "cart_item_count": len(order.items),
+            }
+        }
+
+        pay_resp = await client.post(
+            f"{PAYMENT_SERVICE_URL}/api/v1/checkout",
+            json=pay_payload,
+            headers=_pay_headers(str(uuid.uuid4()), request=request),
+        )
+
+        if pay_resp.status_code not in (200, 201):
+            for tid in reserved_ticket_ids:
+                await _cancel_reserved_ticket(
+                    client,
+                    tid,
+                    inv_headers,
+                    service_label="Inventory Service",
+                )
+            raise HTTPException(status_code=400, detail="Erro ao criar checkout session")
+
+        payload = pay_resp.json()
+        checkout_url = payload.get("checkout_url")
+        if isinstance(checkout_url, str) and checkout_url.startswith(PAYMENT_SERVICE_URL):
+            checkout_url = checkout_url.replace(PAYMENT_SERVICE_URL, PAYMENT_PUBLIC_URL, 1)
+
+        if isinstance(checkout_url, str) and checkout_url:
+            payload["checkout_url"] = _append_query_params(checkout_url, {"force_auth": "1"})
+
+        payload["ticket_count"] = len(reserved_ticket_ids)
+        payload["line_item_count"] = len(line_items)
         return payload
 
 
