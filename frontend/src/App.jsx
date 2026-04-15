@@ -564,7 +564,7 @@ function App() {
       {/* ── NAV ─────────────────────────────────── */}
       <nav className="nav">
         <div className="nav-logo">
-          FlashSale <span className="nav-logo-dot" />
+          ⚡ FlashSale
         </div>
         <div className="nav-right">
           {authError && <span className="error-msg" style={{ fontSize: '0.82rem', maxWidth: 260 }}>{authError}</span>}
@@ -602,57 +602,41 @@ function App() {
           <div className="hero-content">
             <div className="hero-eyebrow">
               <span />
-              Flash sales · Live events · Instant checkout
+              🎶 Concerts · Festivals · Sports · Theatre
             </div>
             <h1>
               {token ? (
                 <>Welcome back,<br /><em>{firstName}.</em></>
               ) : (
-                <>Your next event<br />starts <em>here.</em></>
+                <>Find events<br />you'll <em>love.</em></>
               )}
             </h1>
             <p className="hero-sub">
               {token
-                ? 'Browse upcoming events below and buy your tickets in seconds.'
-                : 'Discover events, grab tickets in a flash, and track everything in one place.'}
+                ? 'Your tickets and orders are all here. Browse what\'s coming up!'
+                : 'Browse, buy tickets, and go — it\'s that simple.'}
             </p>
             {!token && (
               <div className="hero-cta">
                 <button className="btn btn-primary" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
-                  Create free account
+                  Get started — it's free
                 </button>
                 <button className="btn btn-ghost" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
                   Sign in
                 </button>
-                <a className="btn btn-ghost" href={buildAuthUiUrl(AUTH_UI_FORGOT_PATH)} style={{ fontSize: '0.85rem', minHeight: 40 }}>
-                  Forgot password
-                </a>
-              </div>
-            )}
-            {!token && (
-              <div className="hero-stats">
-                <div className="hero-stat"><strong>100+</strong><span>Events</span></div>
-                <div className="hero-stat"><strong>5 sec</strong><span>Checkout</span></div>
-                <div className="hero-stat"><strong>Safe</strong><span>Payments</span></div>
               </div>
             )}
           </div>
         </section>
 
-        {/* ── WALLET CTA (if setup required) ─── */}
-        {walletActionUrl && (
-          <div className="flow-info" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.5rem' }}>
-            <span>You need to set up a payment wallet before checking out.</span>
-            <a className="btn btn-primary btn-sm" href={walletActionUrl}>Set up wallet →</a>
-          </div>
-        )}
+
 
         {/* ── EVENTS ──────────────────────────── */}
-        <section className="events-section">
+        <section className="events-section" id="events">
           <div className="section-header">
             <div>
-              <h2>Upcoming Events</h2>
-              <p>{events.length > 0 ? `${events.length} events available` : 'Browse our upcoming lineup'}</p>
+              <h2>What's On 🔥</h2>
+              <p>{events.length > 0 ? `${events.length} events to explore` : 'Check out what\'s coming up'}</p>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={fetchEvents}>↻ Refresh</button>
           </div>
@@ -665,7 +649,11 @@ function App() {
             <div className="events-grid">
               {eventsError && <p className="error-msg">{eventsError}</p>}
               {events.length === 0 && !eventsError && (
-                <div className="empty-state">No events available right now — check back soon.</div>
+                <div className="empty-state empty-state-card">
+                  <div className="empty-state-emoji">🎪</div>
+                  <p className="empty-state-title">No events yet</p>
+                  <p>Something epic is coming soon — stay tuned!</p>
+                </div>
               )}
               {events.slice(0, 9).map((ev) => {
                 const qty = quantityByEvent[ev.id] || 1;
@@ -726,11 +714,7 @@ function App() {
             </div>
           )}
 
-          {!token && (
-            <p style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-              Sign in to purchase tickets
-            </p>
-          )}
+
         </section>
 
         {/* ── ACCOUNT (logged in) ──────────────── */}
@@ -776,11 +760,8 @@ function App() {
                   <div className={`wallet-status ${!paymentAccount?.exists ? 'wallet-not-ready' : ''}`}>
                     <div className="wallet-status-text">
                       <p>{paymentAccountLoading ? 'Checking…' : paymentAccount?.exists ? '✓ Wallet active' : 'Wallet not set up'}</p>
-                      <small>{paymentAccount?.exists ? 'Ready for checkout' : 'Required to buy tickets'}</small>
+                      <small>{paymentAccount?.exists ? 'Ready for checkout' : 'Set up your wallet at APalPay to buy tickets'}</small>
                     </div>
-                    {!paymentAccount?.exists && !paymentAccountLoading && (
-                      <button className="btn btn-primary btn-sm" onClick={setupPaymentAccount}>Set up →</button>
-                    )}
                     {paymentAccount?.exists && walletActionUrl && (
                       <a className="btn btn-ghost btn-sm" href={walletActionUrl}>Open wallet →</a>
                     )}
@@ -811,7 +792,7 @@ function App() {
                       <div className="order-main">
                         <div className="order-amount">{p.amount} {p.currency?.toUpperCase?.() || ''}</div>
                         <div className="order-date">{formatDate(p.created_at)}</div>
-                        <div className="order-id">{p.id}</div>
+                        <div className="order-id">{p.id?.slice(0, 8)}…</div>
                       </div>
                       <div className="order-actions">
                         <span className={statusClass(p.status)}>{p.status}</span>
@@ -990,19 +971,19 @@ function App() {
         {!token && (
           <section style={{ marginBottom: '3rem' }}>
             <div className="signin-gate">
-              <div style={{ fontSize: '2rem' }}>🎟️</div>
+              <div className="signin-gate-emoji">🎉</div>
               <div>
-                <p style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: '1.1rem', marginBottom: '0.4rem', color: 'var(--text-primary)' }}>
-                  Ready to get your tickets?
+                <p className="signin-gate-title">
+                  Don't miss out!
                 </p>
-                <p>Create a free account or sign in to buy tickets and manage your orders.</p>
+                <p>Join thousands of fans — create your free account and never miss an event.</p>
               </div>
               <div className="signin-gate-btns">
-                <button className="btn btn-primary" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
-                  Create free account
+                <button className="btn btn-primary btn-lg" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
+                  Join FlashSale — it's free
                 </button>
                 <button className="btn btn-ghost" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
-                  Sign in
+                  Already have an account? Sign in
                 </button>
               </div>
             </div>
