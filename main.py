@@ -153,6 +153,12 @@ def _auth_proxy_headers(
         cookie_header = request.headers.get("cookie")
         if cookie_header:
             headers["Cookie"] = cookie_header
+        origin_header = request.headers.get("origin")
+        if origin_header:
+            headers["Origin"] = origin_header
+        referer_header = request.headers.get("referer")
+        if referer_header:
+            headers["Referer"] = referer_header
     return headers
 
 
