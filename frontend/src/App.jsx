@@ -602,13 +602,7 @@ function App() {
           </div>
         </section>
 
-        {/* ── WALLET CTA (if setup required) ─── */}
-        {walletActionUrl && (
-          <div className="flow-info" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.5rem' }}>
-            <span>You need to set up a payment wallet before checking out.</span>
-            <a className="btn btn-primary btn-sm" href={walletActionUrl}>Set up wallet →</a>
-          </div>
-        )}
+
 
         {/* ── EVENTS ──────────────────────────── */}
         <section className="events-section" id="events">
@@ -739,11 +733,8 @@ function App() {
                   <div className={`wallet-status ${!paymentAccount?.exists ? 'wallet-not-ready' : ''}`}>
                     <div className="wallet-status-text">
                       <p>{paymentAccountLoading ? 'Checking…' : paymentAccount?.exists ? '✓ Wallet active' : 'Wallet not set up'}</p>
-                      <small>{paymentAccount?.exists ? 'Ready for checkout' : 'Required to buy tickets'}</small>
+                      <small>{paymentAccount?.exists ? 'Ready for checkout' : 'Set up your wallet at APalPay to buy tickets'}</small>
                     </div>
-                    {!paymentAccount?.exists && !paymentAccountLoading && (
-                      <button className="btn btn-primary btn-sm" onClick={setupPaymentAccount}>Set up →</button>
-                    )}
                     {paymentAccount?.exists && walletActionUrl && (
                       <a className="btn btn-ghost btn-sm" href={walletActionUrl}>Open wallet →</a>
                     )}
