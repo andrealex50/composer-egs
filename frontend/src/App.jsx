@@ -12,7 +12,6 @@ const PAYMENT_UI_LOGIN_PATH = import.meta.env.VITE_PAYMENT_UI_LOGIN_PATH || '/wa
 const PAYMENT_UI_REGISTER_PATH = import.meta.env.VITE_PAYMENT_UI_REGISTER_PATH || '/wallet/register';
 const PAYMENT_UI_DASHBOARD_PATH = import.meta.env.VITE_PAYMENT_UI_DASHBOARD_PATH || '/wallet/dashboard';
 const AUTH_STATE_STORAGE_KEY = 'flashsale_auth_state';
-const REFRESH_TOKEN_STORAGE_KEY = 'flashsale_refresh_token';
 const AUTH_EXCHANGE_PROMISE_KEY = '__flashsaleAuthExchangePromise';
 
 const buildAuthUiUrl = (path, query = {}) => {
@@ -63,9 +62,14 @@ const clearPendingAuthStates = () => localStorage.removeItem(AUTH_STATE_STORAGE_
 const getOrCreateAuthExchangePromise = (code, state) => {
   const existing = window[AUTH_EXCHANGE_PROMISE_KEY];
   if (existing?.code === code && existing?.state === state && existing?.promise) return existing.promise;
-  const promise = axios.post(`${API_BASE_URL}/api/auth/browser/exchange`, { code, state });
+  const promise = axios.post(`${API_BASE_URL}/api/auth/browser/exchange`, { code, state }, { withCredentials: true });
   window[AUTH_EXCHANGE_PROMISE_KEY] = { code, state, promise };
   return promise;
+};
+
+const refreshAccessToken = async () => {
+  const res = await axios.post(`${API_BASE_URL}/api/auth/refresh`, {}, { withCredentials: true });
+  return String(res.data?.access_token || '').trim();
 };
 
 const extractErrorMessage = (error, fallback = 'Request failed') => {
@@ -179,6 +183,22 @@ function App() {
   }, [token]);
 
   useEffect(() => {
+    if (token) return undefined;
+    let cancelled = false;
+    const restoreSession = async () => {
+      try {
+        const restoredToken = await refreshAccessToken();
+        if (cancelled || !restoredToken) return;
+        setToken(restoredToken);
+      } catch (_) {
+        // No persisted session cookie is available, continue as logged out.
+      }
+    };
+    restoreSession();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('auth_callback') !== '1') return;
     const code = params.get('code');
@@ -197,11 +217,6 @@ function App() {
       try {
         const res = await getOrCreateAuthExchangePromise(code, state);
         if (cancelled) return;
-        if (res.data?.refresh_token) {
-          localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, res.data.refresh_token);
-        } else {
-          localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-        }
         consumePendingAuthState(state);
         setUser(res.data?.user || null);
         setToken(res.data?.access_token || '');
@@ -209,7 +224,6 @@ function App() {
       } catch (error) {
         if (cancelled) return;
         consumePendingAuthState(state);
-        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
         setAuthError('Sign-in failed: ' + extractErrorMessage(error, 'Could not finish sign-in.'));
       } finally {
         if (cancelled) return;
@@ -257,13 +271,21 @@ function App() {
       const res = await axios.get(`${API_BASE_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${activeToken}` } });
       setUser(res.data || null);
     } catch (error) {
-      setUser(null);
       const statusCode = error?.response?.status;
       if (statusCode === 401 || statusCode === 403) {
-        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+        try {
+          const restoredToken = await refreshAccessToken();
+          if (restoredToken) {
+            setToken(restoredToken);
+            return;
+          }
+        } catch (_) {
+          // Ignore and continue with sign-out flow below.
+        }
         setToken(null);
         setAuthError('Session expired. Please sign in again.');
       }
+      setUser(null);
       setProfileError(extractErrorMessage(error, 'Could not load profile'));
     } finally {
       setProfileLoading(false);
@@ -272,10 +294,15 @@ function App() {
 
   const handleLogout = async () => {
     try {
-      if (token) await axios.post(`${API_BASE_URL}/api/auth/logout`, {}, { headers: { Authorization: `Bearer ${token}` } });
+      if (token) {
+        await axios.post(
+          `${API_BASE_URL}/api/auth/logout`,
+          {},
+          { headers: { Authorization: `Bearer ${token}` }, withCredentials: true }
+        );
+      }
     } catch (_) {}
     finally {
-      localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
       clearPendingAuthStates();
       setToken(null);
       setUser(null);

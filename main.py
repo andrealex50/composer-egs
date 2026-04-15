@@ -26,7 +26,7 @@ COMPOSER_CORS_ORIGINS = os.getenv(
 )
 COMPOSER_BROWSER_RETURN_TO_ORIGINS = os.getenv(
     "COMPOSER_BROWSER_RETURN_TO_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5500,http://127.0.0.1:5500",
 )
 BROWSER_HANDOFF_TTL_SECONDS = max(30, int(os.getenv("BROWSER_HANDOFF_TTL_SECONDS", "120")))
 EVENT_MUTATIONS_REQUIRE_ADMIN = os.getenv("EVENT_MUTATIONS_REQUIRE_ADMIN", "false").lower() in {"1", "true", "yes"}
@@ -140,6 +140,61 @@ def _auth_headers(authorization: str | None) -> dict:
     if authorization:
         h["Authorization"] = authorization
     return h
+
+
+def _auth_proxy_headers(
+    authorization: str | None,
+    request: Request,
+    *,
+    include_cookie: bool = False,
+) -> dict:
+    headers = _auth_headers(authorization)
+    if include_cookie:
+        cookie_header = request.headers.get("cookie")
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+    return headers
+
+
+async def _proxy_auth_with_response(
+    method: str,
+    path: str,
+    *,
+    request: Request,
+    headers: dict | None = None,
+    json: dict | None = None,
+) -> Response:
+    """Proxy específico para Auth que preserva Set-Cookie e status code."""
+    target_url = f"{AUTH_SERVICE_URL}{path}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            upstream = await client.request(
+                method,
+                target_url,
+                headers=_with_trace_headers(headers, request),
+                json=json,
+            )
+        except httpx.ConnectError:
+            raise HTTPException(status_code=503, detail="Auth Service indisponível")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Auth Service timeout")
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=503, detail=f"Auth Service erro: {exc}")
+
+    if upstream.status_code >= 400:
+        try:
+            detail = upstream.json()
+        except Exception:
+            detail = upstream.text or f"Erro {upstream.status_code}"
+        raise HTTPException(status_code=upstream.status_code, detail=detail)
+
+    downstream = Response(content=upstream.content, status_code=upstream.status_code)
+    content_type = upstream.headers.get("content-type")
+    if content_type:
+        downstream.headers["content-type"] = content_type
+    for set_cookie_value in upstream.headers.get_list("set-cookie"):
+        downstream.headers.append("set-cookie", set_cookie_value)
+    return downstream
 
 
 def _with_trace_headers(headers: dict | None = None, request: Request | None = None) -> dict:
@@ -396,15 +451,30 @@ async def auth_register(request: Request):
 @app.post("/api/auth/login", summary="Login (JWT)", tags=["Auth"])
 async def auth_login(request: Request):
     body = await request.json()
-    return await proxy("POST", f"{AUTH_SERVICE_URL}/api/v1/auth/login",
-                        json=body, service_label="Auth Service", request=request)
+    return await _proxy_auth_with_response(
+        "POST",
+        "/api/v1/auth/login",
+        request=request,
+        headers=_auth_proxy_headers(None, request),
+        json=body,
+    )
 
 
 @app.post("/api/auth/refresh", summary="Renovar access token", tags=["Auth"])
 async def auth_refresh(request: Request):
-    body = await request.json()
-    return await proxy("POST", f"{AUTH_SERVICE_URL}/api/v1/auth/refresh",
-                        json=body, service_label="Auth Service", request=request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    return await _proxy_auth_with_response(
+        "POST",
+        "/api/v1/auth/refresh",
+        request=request,
+        headers=_auth_proxy_headers(None, request, include_cookie=True),
+        json=body,
+    )
 
 
 @app.get("/api/auth/me", summary="Perfil do utilizador autenticado", tags=["Auth"])
@@ -417,10 +487,12 @@ async def auth_me(request: Request, authorization: Optional[str] = Header(None))
 
 @app.post("/api/auth/logout", summary="Logout", tags=["Auth"])
 async def auth_logout(request: Request, authorization: Optional[str] = Header(None)):
-    return await proxy("POST", f"{AUTH_SERVICE_URL}/api/v1/auth/logout",
-                        headers=_auth_headers(authorization),
-                        service_label="Auth Service",
-                        request=request)
+    return await _proxy_auth_with_response(
+        "POST",
+        "/api/v1/auth/logout",
+        request=request,
+        headers=_auth_proxy_headers(authorization, request, include_cookie=True),
+    )
 
 
 @app.post("/api/auth/forgot-password", summary="Solicitar reset de password", tags=["Auth"])

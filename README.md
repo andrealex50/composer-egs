@@ -168,8 +168,13 @@ uvicorn main:app --reload --port 8080
 |----------|---------|-----------|
 | `AUTH_SERVICE_URL` | `http://auth-service:8000` | URL do Auth Service |
 | `COMPOSER_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500` | Origins permitidas pelo gateway Composer |
-| `COMPOSER_BROWSER_RETURN_TO_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Origins autorizadas para o callback browser one-time do Composer |
+| `COMPOSER_BROWSER_RETURN_TO_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5500,http://127.0.0.1:5500` | Origins autorizadas para o callback browser one-time do Composer |
 | `AUTH_BACKEND_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500` | Origins permitidas diretamente pelo Auth Service |
+| `AUTH_REFRESH_COOKIE_NAME` | `egs_refresh_token` | Nome da cookie HttpOnly usada para persistir o refresh token |
+| `AUTH_REFRESH_COOKIE_PATH` | `/` | Path da cookie de refresh |
+| `AUTH_REFRESH_COOKIE_SAMESITE` | `lax` | Política SameSite da cookie (`lax`, `strict`, `none`) |
+| `AUTH_REFRESH_COOKIE_SECURE` | `false` | Em dev HTTP deve ser `false`; em produção HTTPS deve ser `true` |
+| `AUTH_REFRESH_COOKIE_HTTPONLY` | `true` | Mantém o refresh token inacessível ao JavaScript do browser |
 | `AUTH_FRONTEND_PUBLIC_BASE_URL` | `http://localhost:5500` | Base URL pública do frontend separado do Auth usada nos links de reset |
 | `AUTH_PASSWORD_RESET_LINK_PATH` | `/templates/reset_password.html` | Path do frontend do Auth que recebe o token de reset |
 | `INVENTORY_SERVICE_URL` | `http://inventory-service:8000` | URL do Inventory Service |

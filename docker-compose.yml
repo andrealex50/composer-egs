@@ -10,7 +10,7 @@ services:
     environment:
       AUTH_SERVICE_URL: http://auth-service:8000
       COMPOSER_CORS_ORIGINS: ${COMPOSER_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500}
-      COMPOSER_BROWSER_RETURN_TO_ORIGINS: ${COMPOSER_BROWSER_RETURN_TO_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      COMPOSER_BROWSER_RETURN_TO_ORIGINS: ${COMPOSER_BROWSER_RETURN_TO_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5500,http://127.0.0.1:5500}
       INVENTORY_SERVICE_URL: http://inventory-service:8000
       PAYMENT_SERVICE_URL: http://payment-service:8000
       INVENTORY_API_KEY: sk_test_inventory_dev_key
@@ -46,6 +46,11 @@ services:
       BACKEND_CORS_ORIGINS: ${AUTH_BACKEND_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500,http://localhost:8002,http://127.0.0.1:8002}
       SERVICE_PUBLIC_BASE_URL: ${AUTH_FRONTEND_PUBLIC_BASE_URL:-http://localhost:5500}
       PASSWORD_RESET_LINK_PATH: ${AUTH_PASSWORD_RESET_LINK_PATH:-/templates/reset_password.html}
+      AUTH_REFRESH_COOKIE_NAME: ${AUTH_REFRESH_COOKIE_NAME:-egs_refresh_token}
+      AUTH_REFRESH_COOKIE_PATH: ${AUTH_REFRESH_COOKIE_PATH:-/}
+      AUTH_REFRESH_COOKIE_SAMESITE: ${AUTH_REFRESH_COOKIE_SAMESITE:-lax}
+      AUTH_REFRESH_COOKIE_SECURE: ${AUTH_REFRESH_COOKIE_SECURE:-false}
+      AUTH_REFRESH_COOKIE_HTTPONLY: ${AUTH_REFRESH_COOKIE_HTTPONLY:-true}
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       REFRESH_TOKEN_EXPIRE_DAYS: 7
