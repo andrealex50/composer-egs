@@ -26,7 +26,7 @@ COMPOSER_CORS_ORIGINS = os.getenv(
 )
 COMPOSER_BROWSER_RETURN_TO_ORIGINS = os.getenv(
     "COMPOSER_BROWSER_RETURN_TO_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5500,http://127.0.0.1:5500",
+    "http://localhost:5173,http://127.0.0.1:5173",
 )
 BROWSER_HANDOFF_TTL_SECONDS = max(30, int(os.getenv("BROWSER_HANDOFF_TTL_SECONDS", "120")))
 EVENT_MUTATIONS_REQUIRE_ADMIN = os.getenv("EVENT_MUTATIONS_REQUIRE_ADMIN", "false").lower() in {"1", "true", "yes"}
