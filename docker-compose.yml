@@ -93,6 +93,68 @@ services:
       - flashsale
 
   # ═══════════════════════════════════════════════════════════════
+  # PAYMENT AUTH SERVICE + Postgres + Redis (For APalPay Accounts)
+  # ═══════════════════════════════════════════════════════════════
+  payment-auth-service:
+    build: ../EGS/auth-service
+    container_name: payment-auth-service
+    ports:
+      - "8005:8000"
+    environment:
+      DATABASE_URL: postgresql://user:password@payment-auth-postgres:5432/auth_db
+      REDIS_URL: redis://payment-auth-redis:6379/0
+      SECRET_KEY: super-secret-jwt-key-for-dev-payment-2024
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
+      BACKEND_CORS_ORIGINS: ${AUTH_BACKEND_CORS_ORIGINS:-http://localhost:8002,http://127.0.0.1:8002,http://localhost:8005,http://127.0.0.1:8005}
+      SERVICE_PUBLIC_BASE_URL: http://localhost:8005
+      PASSWORD_RESET_LINK_PATH: /templates/reset_password.html
+      AUTH_REFRESH_COOKIE_NAME: payment_refresh_token
+      AUTH_REFRESH_COOKIE_PATH: /
+      AUTH_REFRESH_COOKIE_SAMESITE: lax
+      AUTH_REFRESH_COOKIE_SECURE: "false"
+      AUTH_REFRESH_COOKIE_HTTPONLY: "true"
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      REFRESH_TOKEN_EXPIRE_DAYS: 7
+      DEBUG: "False"
+    depends_on:
+      payment-auth-postgres:
+        condition: service_healthy
+      payment-auth-redis:
+        condition: service_healthy
+    networks:
+      - flashsale
+    restart: unless-stopped
+
+  payment-auth-postgres:
+    image: postgres:15-alpine
+    container_name: payment-auth-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: auth_db
+    volumes:
+      - payment_auth_pg_data_fresh:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flashsale
+
+  payment-auth-redis:
+    image: redis:7-alpine
+    container_name: payment-auth-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flashsale
+
+  # ═══════════════════════════════════════════════════════════════
   # INVENTORY SERVICE + Postgres + Redis
   # ═══════════════════════════════════════════════════════════════
   inventory-service:
@@ -163,7 +225,7 @@ services:
       ADMIN_API_KEY: ${PAYMENT_ADMIN_API_KEY:-admin-dev-key-2024}
       DATABASE_URL: postgresql+asyncpg://payment_user:payment_pass@pay-postgres:5432/payment_db
       REDIS_URL: redis://pay-redis:6379/0
-      AUTH_SERVICE_URL: http://auth-service:8000
+      AUTH_SERVICE_URL: http://payment-auth-service:8000
       INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
@@ -175,6 +237,8 @@ services:
         condition: service_healthy
       pay-redis:
         condition: service_healthy
+      payment-auth-service:
+        condition: service_started
     networks:
       - flashsale
     restart: unless-stopped
@@ -213,6 +277,7 @@ volumes:
   auth_pg_data:
   inv_pg_data_fresh:
   pay_pg_data_fresh:
+  payment_auth_pg_data_fresh:
 
 networks:
   flashsale:

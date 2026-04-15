@@ -387,6 +387,39 @@ function App() {
     }
   };
 
+  const cancelTicket = async (ticketId) => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/tickets/${ticketId}/cancel`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      fetchProfile(token);
+      setToast({ type: 'success', text: 'Ticket canceled successfully' });
+    } catch (error) {
+      setToast({ type: 'error', text: extractErrorMessage(error, 'Could not cancel ticket') });
+    }
+  };
+
+  const downloadReceipt = async (paymentId) => {
+    if (!token) return;
+    try {
+      setToast({ type: 'info', text: 'Generating receipt...' });
+      const res = await axios.get(`${API_BASE_URL}/api/payments/${paymentId}/receipt`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `receipt-${paymentId.slice(0, 8)}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      setToast({ type: 'error', text: extractErrorMessage(error, 'Could not download receipt') });
+    }
+  };
+
   const fetchPaymentAccount = async (activeToken = token) => {
     if (!activeToken) return;
     setPaymentAccountLoading(true);
@@ -1156,6 +1189,9 @@ function App() {
                       </div>
                       <div className="order-actions">
                         <span className={statusClass(p.status)}>{p.status}</span>
+                        {p.status === 'succeeded' && (
+                          <button className="btn btn-ghost btn-sm" onClick={() => downloadReceipt(p.id)}>📄 Receipt</button>
+                        )}
                         <button className="btn btn-ghost btn-sm" onClick={() => triggerRefund(p.id)}>Refund</button>
                       </div>
                     </div>
