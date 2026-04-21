@@ -17,17 +17,17 @@ from typing import Optional, List
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth-service:8000")
 INVENTORY_SERVICE_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8000")
 PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8000")
-PAYMENT_PUBLIC_URL = os.getenv("PAYMENT_PUBLIC_URL", "http://localhost:8002")
+PAYMENT_PUBLIC_URL = os.getenv("PAYMENT_PUBLIC_URL", "http://payment.flashsale")
 INVENTORY_API_KEY = os.getenv("INVENTORY_API_KEY", "your-secret-api-key")
 PAYMENT_API_KEY = os.getenv("PAYMENT_API_KEY", "your-secret-api-key")
 INTERNAL_SERVICE_KEY = os.getenv("INTERNAL_SERVICE_KEY", "internal-dev-key-2024")
 COMPOSER_CORS_ORIGINS = os.getenv(
     "COMPOSER_CORS_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500,http://composer.flashsale,http://auth.flashsale,http://inventory.flashsale,http://payment.flashsale",
 )
 COMPOSER_BROWSER_RETURN_TO_ORIGINS = os.getenv(
     "COMPOSER_BROWSER_RETURN_TO_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
+    "http://localhost:5173,http://127.0.0.1:5173,http://composer.flashsale",
 )
 BROWSER_HANDOFF_TTL_SECONDS = max(30, int(os.getenv("BROWSER_HANDOFF_TTL_SECONDS", "120")))
 EVENT_MUTATIONS_REQUIRE_ADMIN = os.getenv("EVENT_MUTATIONS_REQUIRE_ADMIN", "false").lower() in {"1", "true", "yes"}

@@ -1,13 +1,13 @@
 #!/bin/bash
 # ======================================================
 # FlashSale Composer - E2E Integracao (Auth+Inventory+Payment)
-# Valida os 3 servicos atraves do Composer (porta 8080)
+# Valida os 3 servicos atraves do Composer via Traefik (porta 80)
 # ======================================================
 
 set -u
 set -o pipefail
 
-BASE="http://localhost:8080"
+BASE="http://composer.flashsale"
 PASSED=0
 FAILED=0
 TOTAL=0
@@ -186,11 +186,11 @@ else
   fail "checkout sem checkout_url/session_id"
 fi
 
-echo "22. checkout_url deve ser publico (localhost:8002)"
-echo "$CHECKOUT_URL" | grep -q '^http://localhost:8002/checkout/' && pass || fail "checkout_url nao foi reescrito para localhost:8002"
+echo "22. checkout_url deve ser publico (payment.flashsale)"
+echo "$CHECKOUT_URL" | grep -q '^http://payment.flashsale/checkout/' && pass || fail "checkout_url nao foi reescrito para payment.flashsale"
 
 echo "23. Autorizar sessao no payment-service"
-AUTH_RES=$(curl -s -X POST "http://localhost:8002/api/v1/checkout/$SESSION_ID/authorize" \
+AUTH_RES=$(curl -s -X POST "http://payment.flashsale/api/v1/checkout/$SESSION_ID/authorize" \
   -H "Authorization: Bearer $TOKEN")
 AUTH_STATUS=$(echo "$AUTH_RES" | json_get status)
 [ "$AUTH_STATUS" = "succeeded" ] && pass || fail "authorize expected succeeded, got '$AUTH_STATUS' - response: $AUTH_RES"

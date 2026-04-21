@@ -3,11 +3,11 @@ import axios from 'axios';
 import './App.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
-const AUTH_UI_BASE_URL = import.meta.env.VITE_AUTH_UI_BASE_URL || 'http://localhost:5500';
+const AUTH_UI_BASE_URL = import.meta.env.VITE_AUTH_UI_BASE_URL || 'http://auth.flashsale';
 const AUTH_UI_LOGIN_PATH = import.meta.env.VITE_AUTH_UI_LOGIN_PATH || '/templates/login.html';
 const AUTH_UI_REGISTER_PATH = import.meta.env.VITE_AUTH_UI_REGISTER_PATH || '/templates/register.html';
 const AUTH_UI_FORGOT_PATH = import.meta.env.VITE_AUTH_UI_FORGOT_PATH || '/templates/forgot_password.html';
-const PAYMENT_UI_BASE_URL = import.meta.env.VITE_PAYMENT_UI_BASE_URL || 'http://localhost:8002';
+const PAYMENT_UI_BASE_URL = import.meta.env.VITE_PAYMENT_UI_BASE_URL || 'http://payment.flashsale';
 const PAYMENT_UI_LOGIN_PATH = import.meta.env.VITE_PAYMENT_UI_LOGIN_PATH || '/wallet/login';
 const PAYMENT_UI_REGISTER_PATH = import.meta.env.VITE_PAYMENT_UI_REGISTER_PATH || '/wallet/register';
 const PAYMENT_UI_DASHBOARD_PATH = import.meta.env.VITE_PAYMENT_UI_DASHBOARD_PATH || '/wallet/dashboard';

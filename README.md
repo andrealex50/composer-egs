@@ -128,12 +128,12 @@ Verifica se tudo está a correr:
 docker compose ps
 ```
 
-O Composer fica disponível em **http://localhost:8080**
+O Composer fica disponível em **http://composer.flashsale**
 
 Para compatibilidade com os frontends estáticos das equipas:
 
-- Auth Service → **http://localhost:8000**
-- Payment Service (API + wallet UI + hosted checkout) → **http://localhost:8002**
+- Auth Service → **http://auth.flashsale**
+- Payment Service (API + wallet UI + hosted checkout) → **http://payment.flashsale**
 
 O `docker-compose.yml` também já injeta `AUTH_SERVICE_URL=http://auth-service:8000` e `INTERNAL_SERVICE_KEY` no Payment Service para que ele valide Bearer tokens no Auth através de `/api/v1/auth/verify`.
 
@@ -168,19 +168,19 @@ uvicorn main:app --reload --port 8080
 | Variável | Default | Descrição |
 |----------|---------|-----------|
 | `AUTH_SERVICE_URL` | `http://auth-service:8000` | URL do Auth Service |
-| `COMPOSER_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500` | Origins permitidas pelo gateway Composer |
-| `COMPOSER_BROWSER_RETURN_TO_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5500,http://127.0.0.1:5500` | Origins autorizadas para o callback browser one-time do Composer |
+| `COMPOSER_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500,http://composer.flashsale,http://auth.flashsale,http://inventory.flashsale,http://payment.flashsale` | Origins permitidas pelo gateway Composer |
+| `COMPOSER_BROWSER_RETURN_TO_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://composer.flashsale` | Origins autorizadas para o callback browser one-time do Composer |
 | `AUTH_BACKEND_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500` | Origins permitidas diretamente pelo Auth Service |
 | `AUTH_REFRESH_COOKIE_NAME` | `egs_refresh_token` | Nome da cookie HttpOnly usada para persistir o refresh token |
 | `AUTH_REFRESH_COOKIE_PATH` | `/` | Path da cookie de refresh |
 | `AUTH_REFRESH_COOKIE_SAMESITE` | `lax` | Política SameSite da cookie (`lax`, `strict`, `none`) |
 | `AUTH_REFRESH_COOKIE_SECURE` | `false` | Em dev HTTP deve ser `false`; em produção HTTPS deve ser `true` |
 | `AUTH_REFRESH_COOKIE_HTTPONLY` | `true` | Mantém o refresh token inacessível ao JavaScript do browser |
-| `AUTH_FRONTEND_PUBLIC_BASE_URL` | `http://localhost:5500` | Base URL pública do frontend separado do Auth usada nos links de reset |
+| `AUTH_FRONTEND_PUBLIC_BASE_URL` | `http://auth.flashsale` | Base URL pública do frontend separado do Auth usada nos links de reset |
 | `AUTH_PASSWORD_RESET_LINK_PATH` | `/templates/reset_password.html` | Path do frontend do Auth que recebe o token de reset |
 | `INVENTORY_SERVICE_URL` | `http://inventory-service:8000` | URL do Inventory Service |
 | `PAYMENT_SERVICE_URL` | `http://payment-service:8000` | URL do Payment Service |
-| `PAYMENT_PUBLIC_URL` | `http://localhost:8002` | Base pública do Payment para wallet UI e hosted checkout |
+| `PAYMENT_PUBLIC_URL` | `http://payment.flashsale` | Base pública do Payment para wallet UI e hosted checkout |
 | `INVENTORY_API_KEY` | `your-secret-api-key` | API Key para o Inventory |
 | `PAYMENT_API_KEY` | `your-secret-api-key` | API Key para o Payment |
 | `PAYMENT_ADMIN_API_KEY` | `admin-dev-key-2024` | Admin key bootstrap do Payment Service |
@@ -198,7 +198,7 @@ uvicorn main:app --reload --port 8080
 
 O Auth Service deixou de servir templates server-side. Os links de reset devem apontar para o frontend separado da equipa de auth, configurado por `AUTH_FRONTEND_PUBLIC_BASE_URL` + `AUTH_PASSWORD_RESET_LINK_PATH`.
 
-O frontend estático do auth que está no repositório EGS chama a API diretamente em `http://localhost:8000/api/v1`. Por isso, este `docker-compose.yml` expõe o Auth Service na porta `8000` e já inclui `http://localhost:5500`/`http://127.0.0.1:5500` em `AUTH_BACKEND_CORS_ORIGINS`.
+O frontend estático do auth que está no repositório EGS chama a API diretamente em `http://auth.flashsale/api/v1`. Por isso, este `docker-compose.yml` publica apenas o Traefik na porta `80` e já inclui `http://localhost:5500`/`http://127.0.0.1:5500` em `AUTH_BACKEND_CORS_ORIGINS`.
 
 Usar o mesmo Auth Service não implica juntar os fluxos de negócio de FlashSale e Payment. O Auth centraliza identidade; cada serviço continua a ter as suas próprias regras, permissões e onboarding.
 
@@ -212,7 +212,7 @@ Para o login browser completo com frontend separado, o Composer expõe dois endp
 Pedir link de reset:
 
 ```bash
-curl -s -X POST http://localhost:8080/api/auth/forgot-password \
+curl -s -X POST http://composer.flashsale/api/auth/forgot-password \
   -H "Content-Type: application/json" \
   -d '{"email":"teste@flashsale.pt"}' | python3 -m json.tool
 ```
@@ -220,7 +220,7 @@ curl -s -X POST http://localhost:8080/api/auth/forgot-password \
 Testar guard de reset com token inválido:
 
 ```bash
-curl -s -X POST http://localhost:8080/api/auth/reset-password \
+curl -s -X POST http://composer.flashsale/api/auth/reset-password \
   -H "Content-Type: application/json" \
   -d '{"token":"invalid-token","new_password":"ChangedPass123"}' | python3 -m json.tool
 ```
@@ -230,8 +230,8 @@ curl -s -X POST http://localhost:8080/api/auth/reset-password \
 Em ambiente de demo/dev rápido o Composer pode usar a admin key, mas o fluxo correto é usar uma tenant key dedicada:
 
 ```bash
-# 1) Criar tenant key no Payment (porta publica 8002)
-curl -s -X POST http://localhost:8002/api/v1/admin/api-keys \
+# 1) Criar tenant key no Payment (host publico payment.flashsale)
+curl -s -X POST http://payment.flashsale/api/v1/admin/api-keys \
   -H "Content-Type: application/json" \
   -H "X-API-Key: ${PAYMENT_ADMIN_API_KEY:-admin-dev-key-2024}" \
   -d '{
@@ -256,8 +256,8 @@ docker compose up --build -d
 
 Com o serviço a correr:
 
-- **Swagger UI** → [http://localhost:8080/docs](http://localhost:8080/docs)
-- **ReDoc** → [http://localhost:8080/redoc](http://localhost:8080/redoc)
+- **Swagger UI** → [http://composer.flashsale/docs](http://composer.flashsale/docs)
+- **ReDoc** → [http://composer.flashsale/redoc](http://composer.flashsale/redoc)
 
 ---
 
@@ -276,13 +276,13 @@ docker compose ps
 ### 2. Health check
 
 ```bash
-curl -s http://localhost:8080/health | python3 -m json.tool
+curl -s http://composer.flashsale/health | python3 -m json.tool
 ```
 
 ### 3. Registar utilizador de demo
 
 ```bash
-curl -s -X POST http://localhost:8080/api/auth/register \
+curl -s -X POST http://composer.flashsale/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "email": "prof.demo@flashsale.pt",
@@ -294,7 +294,7 @@ curl -s -X POST http://localhost:8080/api/auth/register \
 ### 4. Login e guardar token
 
 ```bash
-LOGIN_JSON=$(curl -s -X POST http://localhost:8080/api/auth/login \
+LOGIN_JSON=$(curl -s -X POST http://composer.flashsale/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "prof.demo@flashsale.pt",
@@ -309,14 +309,14 @@ echo "TOKEN obtido: ${#TOKEN} chars"
 ### 5. Ver perfil autenticado
 
 ```bash
-curl -s http://localhost:8080/api/auth/me \
+curl -s http://composer.flashsale/api/auth/me \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
 ### 6. Listar eventos e guardar EVENT_ID
 
 ```bash
-EVENTS_JSON=$(curl -s http://localhost:8080/api/events)
+EVENTS_JSON=$(curl -s http://composer.flashsale/api/events)
 echo "$EVENTS_JSON" | python3 -m json.tool
 EVENT_ID=$(echo "$EVENTS_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -n1)
 echo "EVENT_ID=$EVENT_ID"
@@ -327,7 +327,7 @@ echo "EVENT_ID=$EVENT_ID"
 ### 7. Criar conta local de Payment
 
 ```bash
-curl -s -X POST http://localhost:8080/api/payment-account/setup \
+curl -s -X POST http://composer.flashsale/api/payment-account/setup \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
@@ -336,7 +336,7 @@ curl -s -X POST http://localhost:8080/api/payment-account/setup \
 ### 8. Iniciar checkout (Saga)
 
 ```bash
-curl -s -X POST http://localhost:8080/api/checkout \
+curl -s -X POST http://composer.flashsale/api/checkout \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
@@ -366,17 +366,17 @@ Depois abre: [http://localhost:5173](http://localhost:5173)
 O portal do Composer pode mostrar links diretos para o frontend separado do auth. Ajusta em `frontend/.env.local` se o teu colega tiver outro host/path:
 
 ```env
-VITE_AUTH_UI_BASE_URL=http://localhost:5500
+VITE_AUTH_UI_BASE_URL=http://auth.flashsale
 VITE_AUTH_UI_LOGIN_PATH=/templates/login.html
 VITE_AUTH_UI_REGISTER_PATH=/templates/register.html
 VITE_AUTH_UI_FORGOT_PATH=/templates/forgot_password.html
-VITE_PAYMENT_UI_BASE_URL=http://localhost:8002
+VITE_PAYMENT_UI_BASE_URL=http://payment.flashsale
 VITE_PAYMENT_UI_LOGIN_PATH=/wallet/login
 VITE_PAYMENT_UI_REGISTER_PATH=/wallet/register
 VITE_PAYMENT_UI_DASHBOARD_PATH=/wallet/dashboard
 ```
 
-Se usares o frontend do teu colega tal como ele está, não mudes a porta do Auth Service: os templates dele estão hardcoded para `http://localhost:8000/api/v1`.
+Se usares o frontend do teu colega tal como ele está, não mudes o host do Auth Service: os templates dele estão hardcoded para `http://auth.flashsale/api/v1`.
 
 O fluxo completo de login fica assim:
 
@@ -390,7 +390,7 @@ O fluxo de Payment fica assim:
 1. O utilizador autentica-se no Auth Service.
 2. O Composer cria ou verifica a conta local do Payment em `POST /api/payment-account/setup`.
 3. O Composer cria a hosted checkout session em `POST /api/v1/checkout` do Payment.
-4. O browser é redirecionado para `http://localhost:8002/checkout/{session_id}`.
+4. O browser é redirecionado para `http://payment.flashsale/checkout/{session_id}`.
 5. A wallet UI do Payment usa o Bearer token do Auth para chamar `POST /api/v1/checkout/{session_id}/authorize`.
 
 Se estiveres a usar o frontend do teu colega tal como está no repositório dele:
@@ -409,13 +409,13 @@ Depois de correr `docker compose up --build -d`, testa com os seguintes comandos
 ### 1. Health Check
 
 ```bash
-curl -s http://localhost:8080/health | python3 -m json.tool
+curl -s http://composer.flashsale/health | python3 -m json.tool
 ```
 
 ### 2. Registar Utilizador
 
 ```bash
-curl -s -X POST http://localhost:8080/api/auth/register \
+curl -s -X POST http://composer.flashsale/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "email": "teste@flashsale.pt",
@@ -427,7 +427,7 @@ curl -s -X POST http://localhost:8080/api/auth/register \
 ### 3. Login
 
 ```bash
-curl -s -X POST http://localhost:8080/api/auth/login \
+curl -s -X POST http://composer.flashsale/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "teste@flashsale.pt",
@@ -444,14 +444,14 @@ TOKEN="<colar o access_token aqui>"
 ### 4. Ver Perfil
 
 ```bash
-curl -s http://localhost:8080/api/auth/me \
+curl -s http://composer.flashsale/api/auth/me \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
 ### 4.1. Forgot Password
 
 ```bash
-curl -s -X POST http://localhost:8080/api/auth/forgot-password \
+curl -s -X POST http://composer.flashsale/api/auth/forgot-password \
   -H "Content-Type: application/json" \
   -d '{
     "email": "teste@flashsale.pt"
@@ -461,7 +461,7 @@ curl -s -X POST http://localhost:8080/api/auth/forgot-password \
 ### 5. Criar Evento
 
 ```bash
-curl -s -X POST http://localhost:8080/api/events \
+curl -s -X POST http://composer.flashsale/api/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -483,13 +483,13 @@ EVENT_ID="<colar o id do evento>"
 ### 6. Listar Eventos
 
 ```bash
-curl -s http://localhost:8080/api/events | python3 -m json.tool
+curl -s http://composer.flashsale/api/events | python3 -m json.tool
 ```
 
 ### 7. Criar Bilhetes (batch de 100)
 
 ```bash
-curl -s -X POST "http://localhost:8080/api/events/${EVENT_ID}/tickets" \
+curl -s -X POST "http://composer.flashsale/api/events/${EVENT_ID}/tickets" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -505,19 +505,19 @@ curl -s -X POST "http://localhost:8080/api/events/${EVENT_ID}/tickets" \
 ### 8. Listar Bilhetes
 
 ```bash
-curl -s "http://localhost:8080/api/events/${EVENT_ID}/tickets" | python3 -m json.tool
+curl -s "http://composer.flashsale/api/events/${EVENT_ID}/tickets" | python3 -m json.tool
 ```
 
 ### 9. Ver Detalhes do Evento (com bilhetes)
 
 ```bash
-curl -s "http://localhost:8080/api/events/${EVENT_ID}" | python3 -m json.tool
+curl -s "http://composer.flashsale/api/events/${EVENT_ID}" | python3 -m json.tool
 ```
 
 ### 10. Reservar Bilhetes
 
 ```bash
-curl -s -X POST http://localhost:8080/api/reservations \
+curl -s -X POST http://composer.flashsale/api/reservations \
   -H "Content-Type: application/json" \
   -d "{
     \"event_id\": \"${EVENT_ID}\",
@@ -534,33 +534,33 @@ TICKET_ID="<colar o id de um dos tickets reservados>"
 ### 11. Ver Disponibilidade do Bilhete
 
 ```bash
-curl -s "http://localhost:8080/api/tickets/${TICKET_ID}/availability" | python3 -m json.tool
+curl -s "http://composer.flashsale/api/tickets/${TICKET_ID}/availability" | python3 -m json.tool
 ```
 
 ### 12. Ver Reserva
 
 ```bash
-curl -s "http://localhost:8080/api/reservations/${TICKET_ID}" | python3 -m json.tool
+curl -s "http://composer.flashsale/api/reservations/${TICKET_ID}" | python3 -m json.tool
 ```
 
 ### 13. Listar Pagamentos
 
 ```bash
-curl -s http://localhost:8080/api/payments \
+curl -s http://composer.flashsale/api/payments \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
 ### 14. Criar Conta Local de Payment
 
 ```bash
-curl -s -X POST http://localhost:8080/api/payment-account/setup \
+curl -s -X POST http://composer.flashsale/api/payment-account/setup \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
 ### 15. Checkout Completo (Saga)
 
 ```bash
-curl -s -X POST http://localhost:8080/api/checkout \
+curl -s -X POST http://composer.flashsale/api/checkout \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
@@ -572,12 +572,12 @@ curl -s -X POST http://localhost:8080/api/checkout \
   }" | python3 -m json.tool
 ```
 
-> O Composer devolve um `checkout_url` público do Payment (`http://localhost:8002/checkout/{session_id}`) para o browser concluir a autorização.
+> O Composer devolve um `checkout_url` público do Payment (`http://payment.flashsale/checkout/{session_id}`) para o browser concluir a autorização.
 
 ### 16. Reembolso (Saga)
 
 ```bash
-curl -s -X POST http://localhost:8080/api/refund \
+curl -s -X POST http://composer.flashsale/api/refund \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{

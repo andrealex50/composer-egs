@@ -1,16 +1,37 @@
 services:
   # ═══════════════════════════════════════════════════════════════
-  # COMPOSER / API GATEWAY  (porta 8080)
+  # TRAEFIK / EDGE PROXY (único serviço publicado no host)
+  # ═══════════════════════════════════════════════════════════════
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    command:
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --api.dashboard=true
+      - --log.level=INFO
+    ports:
+      - "80:80"
+    volumes:
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    networks:
+      - flashsale
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════
+  # COMPOSER / API GATEWAY
   # ═══════════════════════════════════════════════════════════════
   composer:
     build: .
     container_name: composer
-    ports:
-      - "8080:8000"
+    expose:
+      - "8000"
     environment:
       AUTH_SERVICE_URL: http://auth-service:8000
-      COMPOSER_CORS_ORIGINS: ${COMPOSER_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500}
-      COMPOSER_BROWSER_RETURN_TO_ORIGINS: ${COMPOSER_BROWSER_RETURN_TO_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      PAYMENT_PUBLIC_URL: ${PAYMENT_PUBLIC_URL:-http://payment.flashsale}
+      COMPOSER_CORS_ORIGINS: ${COMPOSER_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500,http://composer.flashsale,http://auth.flashsale,http://inventory.flashsale,http://payment.flashsale}
+      COMPOSER_BROWSER_RETURN_TO_ORIGINS: ${COMPOSER_BROWSER_RETURN_TO_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://composer.flashsale}
       INVENTORY_SERVICE_URL: http://inventory-service:8000
       PAYMENT_SERVICE_URL: http://payment-service:8000
       INVENTORY_API_KEY: sk_test_inventory_dev_key
@@ -26,6 +47,11 @@ services:
         condition: service_started
       payment-service:
         condition: service_started
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.composer.rule=Host(`composer.flashsale`)
+      - traefik.http.routers.composer.entrypoints=web
+      - traefik.http.services.composer.loadbalancer.server.port=8000
     networks:
       - flashsale
     restart: unless-stopped
@@ -36,15 +62,15 @@ services:
   auth-service:
     build: ../EGS/auth-service
     container_name: auth-service
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       DATABASE_URL: postgresql://user:password@auth-postgres:5432/auth_db
       REDIS_URL: redis://auth-redis:6379/0
       SECRET_KEY: super-secret-jwt-key-for-dev-2024
       INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
-      BACKEND_CORS_ORIGINS: ${AUTH_BACKEND_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500,http://localhost:8002,http://127.0.0.1:8002}
-      SERVICE_PUBLIC_BASE_URL: ${AUTH_FRONTEND_PUBLIC_BASE_URL:-http://localhost:5500}
+      BACKEND_CORS_ORIGINS: ${AUTH_BACKEND_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5500,http://127.0.0.1:5500,http://composer.flashsale,http://auth.flashsale,http://payment.flashsale}
+      SERVICE_PUBLIC_BASE_URL: ${AUTH_FRONTEND_PUBLIC_BASE_URL:-http://auth.flashsale}
       PASSWORD_RESET_LINK_PATH: ${AUTH_PASSWORD_RESET_LINK_PATH:-/templates/reset_password.html}
       AUTH_REFRESH_COOKIE_NAME: ${AUTH_REFRESH_COOKIE_NAME:-egs_refresh_token}
       AUTH_REFRESH_COOKIE_PATH: ${AUTH_REFRESH_COOKIE_PATH:-/}
@@ -60,6 +86,11 @@ services:
         condition: service_healthy
       auth-redis:
         condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.auth.rule=Host(`auth.flashsale`)
+      - traefik.http.routers.auth.entrypoints=web
+      - traefik.http.services.auth.loadbalancer.server.port=8000
     networks:
       - flashsale
     restart: unless-stopped
@@ -98,15 +129,15 @@ services:
   payment-auth-service:
     build: ../EGS/auth-service
     container_name: payment-auth-service
-    ports:
-      - "8005:8000"
+    expose:
+      - "8000"
     environment:
       DATABASE_URL: postgresql://user:password@payment-auth-postgres:5432/auth_db
       REDIS_URL: redis://payment-auth-redis:6379/0
       SECRET_KEY: super-secret-jwt-key-for-dev-payment-2024
       INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
-      BACKEND_CORS_ORIGINS: ${AUTH_BACKEND_CORS_ORIGINS:-http://localhost:8002,http://127.0.0.1:8002,http://localhost:8005,http://127.0.0.1:8005}
-      SERVICE_PUBLIC_BASE_URL: http://localhost:8005
+      BACKEND_CORS_ORIGINS: ${PAYMENT_AUTH_BACKEND_CORS_ORIGINS:-http://composer.flashsale,http://payment.flashsale,http://payment-auth.flashsale}
+      SERVICE_PUBLIC_BASE_URL: ${PAYMENT_AUTH_PUBLIC_BASE_URL:-http://payment-auth.flashsale}
       PASSWORD_RESET_LINK_PATH: /templates/reset_password.html
       AUTH_REFRESH_COOKIE_NAME: payment_refresh_token
       AUTH_REFRESH_COOKIE_PATH: /
@@ -122,6 +153,11 @@ services:
         condition: service_healthy
       payment-auth-redis:
         condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.payment-auth.rule=Host(`payment-auth.flashsale`)
+      - traefik.http.routers.payment-auth.entrypoints=web
+      - traefik.http.services.payment-auth.loadbalancer.server.port=8000
     networks:
       - flashsale
     restart: unless-stopped
@@ -176,6 +212,11 @@ services:
         condition: service_healthy
       inv-redis:
         condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.inventory.rule=Host(`inventory.flashsale`)
+      - traefik.http.routers.inventory.entrypoints=web
+      - traefik.http.services.inventory.loadbalancer.server.port=8000
     networks:
       - flashsale
     restart: unless-stopped
@@ -214,8 +255,8 @@ services:
   payment-service:
     build: ../Payment_service
     container_name: payment-service
-    ports:
-      - "8002:8000"
+    expose:
+      - "8000"
     environment:
       APP_NAME: Payment Service
       APP_VERSION: 1.0.0
@@ -239,6 +280,11 @@ services:
         condition: service_healthy
       payment-auth-service:
         condition: service_started
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.payment.rule=Host(`payment.flashsale`)
+      - traefik.http.routers.payment.entrypoints=web
+      - traefik.http.services.payment.loadbalancer.server.port=8000
     networks:
       - flashsale
     restart: unless-stopped

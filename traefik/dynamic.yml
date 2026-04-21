@@ -1,0 +1,63 @@
+http:
+  routers:
+    composer:
+      rule: Host(`composer.flashsale`)
+      entryPoints:
+        - web
+      service: composer-svc
+
+    auth:
+      rule: Host(`auth.flashsale`)
+      entryPoints:
+        - web
+      service: auth-svc
+
+    payment-auth:
+      rule: Host(`payment-auth.flashsale`)
+      entryPoints:
+        - web
+      service: payment-auth-svc
+
+    inventory:
+      rule: Host(`inventory.flashsale`)
+      entryPoints:
+        - web
+      service: inventory-svc
+
+    payment:
+      rule: Host(`payment.flashsale`)
+      entryPoints:
+        - web
+      service: payment-svc
+
+    traefik-dashboard:
+      rule: Host(`traefik.flashsale`)
+      entryPoints:
+        - web
+      service: api@internal
+
+  services:
+    composer-svc:
+      loadBalancer:
+        servers:
+          - url: http://composer:8000
+
+    auth-svc:
+      loadBalancer:
+        servers:
+          - url: http://auth-service:8000
+
+    payment-auth-svc:
+      loadBalancer:
+        servers:
+          - url: http://payment-auth-service:8000
+
+    inventory-svc:
+      loadBalancer:
+        servers:
+          - url: http://inventory-service:8000
+
+    payment-svc:
+      loadBalancer:
+        servers:
+          - url: http://payment-service:8000
