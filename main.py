@@ -6,6 +6,8 @@ from decimal import Decimal, ROUND_HALF_UP
 import httpx
 import urllib.parse
 from fastapi import FastAPI, HTTPException, Header, Request, Response, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -1563,3 +1565,25 @@ async def health_check():
         media_type="application/json",
         status_code=status_code,
     )
+
+
+# ---------------------------------------------------------------------------
+# Frontend estático — servido apenas quando o dist existe (produção via Docker)
+# ---------------------------------------------------------------------------
+_FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+_FRONTEND_ASSETS = os.path.join(_FRONTEND_DIST, "assets")
+_FRONTEND_INDEX = os.path.join(_FRONTEND_DIST, "index.html")
+
+if os.path.isdir(_FRONTEND_ASSETS):
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_ASSETS), name="assets")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_frontend(full_path: str):
+    """SPA fallback: devolve index.html para qualquer rota não-API."""
+    # Deixa as rotas de API e docs serem tratadas pelos routers registados
+    if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
+        raise HTTPException(status_code=404, detail="Not found")
+    if os.path.isfile(_FRONTEND_INDEX):
+        return FileResponse(_FRONTEND_INDEX)
+    raise HTTPException(status_code=404, detail="Frontend não encontrado")
