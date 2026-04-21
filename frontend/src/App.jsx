@@ -1267,7 +1267,6 @@ function App() {
             </div>
           )}
         </section>
-        )}
 
         {/* ── CART ───────────────────────────── */}
         <section className="cart-section view-panel" id="cart" style={{ display: visibleMainView === 'cart' ? 'block' : 'none' }}>
@@ -1321,7 +1320,6 @@ function App() {
             </div>
           )}
         </section>
-        )}
 
         {/* ── ACCOUNT (logged in) ──────────────── */}
         {token && (
