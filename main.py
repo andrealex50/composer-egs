@@ -1,6 +1,9 @@
+import asyncio
+import collections
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 import httpx
@@ -83,6 +86,24 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# API Call Tracker — ring buffer for the KPI dashboard
+# ---------------------------------------------------------------------------
+_API_CALL_LOG: collections.deque = collections.deque(maxlen=50)
+
+
+def _record_api_call(method: str, url: str, status_code: int, latency_ms: float, service: str = ""):
+    """Record a proxy API call for observability."""
+    _API_CALL_LOG.appendleft({
+        "ts": datetime.now(tz=timezone.utc).isoformat(),
+        "method": method.upper(),
+        "url": url,
+        "status": status_code,
+        "latency_ms": round(latency_ms, 1),
+        "service": service,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Helper — proxy genérico reutilizável
 # ---------------------------------------------------------------------------
 
@@ -99,6 +120,7 @@ async def proxy(
     request: Request | None = None,
 ) -> dict | bytes:
     """Faz proxy de um pedido para um serviço interno e devolve a resposta."""
+    _t0 = time.perf_counter()
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.request(
@@ -109,11 +131,16 @@ async def proxy(
                 params=params,
             )
         except httpx.ConnectError:
+            _record_api_call(method, url, 503, round((time.perf_counter() - _t0) * 1000, 1), service_label)
             raise HTTPException(status_code=503, detail=f"{service_label} indisponível")
         except httpx.TimeoutException:
+            _record_api_call(method, url, 504, round((time.perf_counter() - _t0) * 1000, 1), service_label)
             raise HTTPException(status_code=504, detail=f"{service_label} timeout")
         except httpx.RequestError as exc:
+            _record_api_call(method, url, 503, round((time.perf_counter() - _t0) * 1000, 1), service_label)
             raise HTTPException(status_code=503, detail=f"{service_label} erro: {exc}")
+
+        _record_api_call(method, url, resp.status_code, round((time.perf_counter() - _t0) * 1000, 1), service_label)
 
         if resp.status_code >= 400:
             try:
@@ -891,7 +918,7 @@ async def list_payments(request: Request, authorization: Optional[str] = Header(
     # Fetch a page from Payment Service and filter it by ownership rules:
     # 1) payments owned by current local payment customer
     # 2) payments initiated by this authenticated Composer identity
-    upstream_limit = max(100, limit + offset)
+    upstream_limit = min(100, max(limit + offset, 20))
     params.pop("customer_id", None)
     params["limit"] = upstream_limit
     params["offset"] = 0
@@ -1531,7 +1558,193 @@ async def process_refund(request: Request, req: RefundRequest, authorization: Op
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 8. HEALTH CHECK  —  GET /health
+# 8. KPI OBSERVABILITY DASHBOARD  —  GET /api/kpi/dashboard
+#    Aggregates health + KPIs from all downstream services in parallel
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def _fetch_service_health(client: httpx.AsyncClient, name: str, url: str) -> dict:
+    """Call a service health endpoint and measure latency."""
+    start = time.perf_counter()
+    try:
+        r = await client.get(url)
+        latency_ms = round((time.perf_counter() - start) * 1000, 1)
+        status_str = "online" if r.status_code == 200 else "degraded"
+        return {"name": name, "status": status_str, "latency_ms": latency_ms}
+    except Exception:
+        latency_ms = round((time.perf_counter() - start) * 1000, 1)
+        return {"name": name, "status": "offline", "latency_ms": latency_ms}
+
+
+async def _fetch_inventory_kpi(client: httpx.AsyncClient) -> dict:
+    """Fetch inventory KPI snapshot from the Inventory Service."""
+    try:
+        r = await client.get(
+            f"{INVENTORY_SERVICE_URL}/internal/kpi/snapshot",
+            headers={"X-API-Key": INVENTORY_API_KEY},
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_payment_kpi(client: httpx.AsyncClient) -> dict:
+    """Aggregate payment KPIs from the Payment Service API."""
+    debug_info = []
+    try:
+        # Fetch payments in pages of 100 (Payment Service max limit)
+        all_items = []
+        total_payments = 0
+        offset = 0
+        page_limit = 100
+        while True:
+            pay_resp = await client.get(
+                f"{PAYMENT_SERVICE_URL}/api/v1/payments",
+                headers={"X-API-Key": PAYMENT_API_KEY},
+                params={"limit": page_limit, "offset": offset},
+            )
+            debug_info.append(f"payments(offset={offset}): HTTP {pay_resp.status_code}")
+            if pay_resp.status_code != 200:
+                try:
+                    debug_info.append(f"payments body: {pay_resp.text[:300]}")
+                except Exception:
+                    pass
+                break
+            page_data = pay_resp.json() if isinstance(pay_resp.json(), dict) else {}
+            page_items = page_data.get("items", [])
+            total_payments = page_data.get("total", total_payments)
+            all_items.extend(page_items)
+            if len(page_items) < page_limit:
+                break
+            offset += page_limit
+            # Safety: don't fetch more than 10 pages
+            if offset >= page_limit * 10:
+                break
+
+        # Fetch customer count
+        cust_resp = await client.get(
+            f"{PAYMENT_SERVICE_URL}/api/v1/customers",
+            headers={"X-API-Key": PAYMENT_API_KEY},
+            params={"limit": 1, "offset": 0},
+        )
+        debug_info.append(f"customers: HTTP {cust_resp.status_code}")
+        if cust_resp.status_code != 200:
+            try:
+                debug_info.append(f"customers body: {cust_resp.text[:300]}")
+            except Exception:
+                pass
+        customers_data = cust_resp.json() if cust_resp.status_code == 200 else {}
+
+        items = all_items
+        if not total_payments:
+            total_payments = len(items)
+
+        # Aggregate by status
+        status_counts: dict[str, int] = {}
+        total_revenue_cents = 0
+        total_pending_cents = 0
+        total_amount_cents = 0
+        total_refunded_cents = 0
+        currencies_seen: set[str] = set()
+
+        for p in items:
+            st = str(p.get("status") or "unknown").lower()
+            status_counts[st] = status_counts.get(st, 0) + 1
+            amount = int(p.get("amount") or 0)
+            currency = str(p.get("currency") or "eur").upper()
+            currencies_seen.add(currency)
+            total_amount_cents += amount
+            if st in ("succeeded", "paid"):
+                total_revenue_cents += amount
+            elif st in ("pending", "processing", "requires_action"):
+                total_pending_cents += amount
+            refunded = int(p.get("amount_refunded") or 0)
+            total_refunded_cents += refunded
+
+        total_customers = customers_data.get("total", 0) if isinstance(customers_data, dict) else 0
+
+        return {
+            "total_payments": total_payments,
+            "total_revenue_cents": total_revenue_cents,
+            "total_pending_cents": total_pending_cents,
+            "total_amount_cents": total_amount_cents,
+            "total_refunded_cents": total_refunded_cents,
+            "currency": next(iter(currencies_seen), "EUR"),
+            "total_customers": total_customers,
+            "by_status": status_counts,
+            "_debug": debug_info,
+        }
+    except Exception as exc:
+        return {
+            "total_payments": 0,
+            "total_revenue_cents": 0,
+            "total_pending_cents": 0,
+            "total_amount_cents": 0,
+            "total_refunded_cents": 0,
+            "currency": "EUR",
+            "total_customers": 0,
+            "by_status": {},
+            "_debug": debug_info + [f"exception: {exc}"],
+        }
+
+
+@app.get("/api/kpi/dashboard", summary="KPI Observability Dashboard", tags=["KPI"])
+async def kpi_dashboard(request: Request, authorization: Optional[str] = Header(None)):
+    """Aggregates health status and KPIs from all downstream services.
+
+    Requires admin or promoter role.
+    """
+    # Verify admin/promoter access
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Token em falta")
+    claims = await _verify_user_token(token, request)
+    role = str(claims.get("role") or "").lower()
+    if role not in EVENT_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
+
+    generated_at = datetime.now(tz=timezone.utc).isoformat()
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        # Run all fetches in parallel
+        (
+            auth_health,
+            inv_health,
+            pay_health,
+            inv_kpi,
+            pay_kpi,
+        ) = await asyncio.gather(
+            _fetch_service_health(client, "auth", f"{AUTH_SERVICE_URL}/health"),
+            _fetch_service_health(client, "inventory", f"{INVENTORY_SERVICE_URL}/health"),
+            _fetch_service_health(client, "payment", f"{PAYMENT_SERVICE_URL}/health"),
+            _fetch_inventory_kpi(client),
+            _fetch_payment_kpi(client),
+        )
+
+    # Build composer self-status
+    services_health = [
+        {"name": "composer", "status": "online", "latency_ms": 0},
+        auth_health,
+        inv_health,
+        pay_health,
+    ]
+
+    all_online = all(s["status"] == "online" for s in services_health)
+
+    return {
+        "generated_at": generated_at,
+        "overall_status": "healthy" if all_online else "degraded",
+        "services": services_health,
+        "inventory": inv_kpi,
+        "payments": pay_kpi,
+        "recent_api_calls": list(_API_CALL_LOG),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 9. HEALTH CHECK  —  GET /health
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/health", summary="Estado do sistema", tags=["Health"])

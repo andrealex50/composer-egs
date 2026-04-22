@@ -269,7 +269,53 @@ function App() {
   const [managerError, setManagerError] = useState('');
   const [managerLoading, setManagerLoading] = useState(false);
 
+  // KPI Dashboard state
+  const [kpiData, setKpiData] = useState(null);
+  const [kpiLoading, setKpiLoading] = useState(false);
+  const [kpiError, setKpiError] = useState('');
+  const [kpiCountdown, setKpiCountdown] = useState(30);
+  const KPI_REFRESH_INTERVAL = 30;
+
   const isPrivilegedUser = ['admin', 'promoter'].includes(String(user?.role || '').toLowerCase());
+
+  // KPI Dashboard fetching + auto-refresh
+  const fetchKpiDashboard = async (activeToken = token) => {
+    if (!activeToken) return;
+    setKpiLoading(true);
+    setKpiError('');
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/kpi/dashboard`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      setKpiData(res.data || null);
+    } catch (error) {
+      const statusCode = error?.response?.status;
+      if (statusCode === 403) {
+        setKpiError('Access restricted to admin / promoter accounts.');
+      } else {
+        setKpiError(extractErrorMessage(error, 'Could not load KPI data'));
+      }
+      setKpiData(null);
+    } finally {
+      setKpiLoading(false);
+      setKpiCountdown(KPI_REFRESH_INTERVAL);
+    }
+  };
+
+  useEffect(() => {
+    if (mainView !== 'kpi' || !token || !isPrivilegedUser) return;
+    fetchKpiDashboard();
+    const refreshTimer = setInterval(() => fetchKpiDashboard(), KPI_REFRESH_INTERVAL * 1000);
+    return () => clearInterval(refreshTimer);
+  }, [mainView, token, isPrivilegedUser]);
+
+  useEffect(() => {
+    if (mainView !== 'kpi') return;
+    const tick = setInterval(() => {
+      setKpiCountdown((prev) => (prev <= 1 ? KPI_REFRESH_INTERVAL : prev - 1));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [mainView]);
   const accountStorageKey = deriveAccountStorageKey(user);
 
   useEffect(() => { fetchEvents(); }, []);
@@ -983,6 +1029,7 @@ function App() {
     { id: 'wishlist', label: 'Wishlist', note: wishlistCount > 0 ? 'Saved for later' : 'Keep favorites here', count: wishlistCount || null },
     { id: 'cart', label: 'Cart', note: cartTicketCount > 0 ? cartTotalLabel : 'Review your picks', count: cartTicketCount || null },
     ...(token ? [{ id: 'account', label: 'Account', note: walletExists ? 'Orders and wallet ready' : 'Profile and settings' }] : []),
+    ...(token && isPrivilegedUser ? [{ id: 'kpi', label: '📊 KPIs', note: 'System observability' }] : []),
   ];
   const managerEventChoices = events
     .filter((ev) => ev?.id)
@@ -1597,6 +1644,362 @@ function App() {
 
                 {managerError && <p className="error-msg">{managerError}</p>}
               </div>
+            )}
+          </section>
+        )}
+
+        {/* ── KPI DASHBOARD ────────────────────── */}
+        {visibleMainView === 'kpi' && token && isPrivilegedUser && (
+          <section className="events-section view-panel kpi-dashboard" id="kpi-dashboard">
+            {/* Header */}
+            <div className="kpi-header">
+              <div className="kpi-header-left">
+                <div className="kpi-header-icon">🔭</div>
+                <div>
+                  <h2>System <em>Observability</em></h2>
+                </div>
+              </div>
+              <div className="kpi-header-meta">
+                {kpiData && (
+                  <span className={`kpi-overall-badge ${
+                    kpiData.overall_status === 'healthy' ? 'kpi-overall-healthy' : 'kpi-overall-degraded'
+                  }`}>
+                    {kpiData.overall_status === 'healthy' ? '● Healthy' : '⚠ Degraded'}
+                  </span>
+                )}
+                <div className="kpi-refresh-info">
+                  <div className="kpi-countdown-ring">
+                    <svg viewBox="0 0 32 32">
+                      <circle
+                        cx="16" cy="16" r="14"
+                        strokeDasharray={`${2 * Math.PI * 14}`}
+                        strokeDashoffset={`${2 * Math.PI * 14 * (1 - kpiCountdown / KPI_REFRESH_INTERVAL)}`}
+                      />
+                    </svg>
+                    <span>{kpiCountdown}</span>
+                  </div>
+                  <span>auto-refresh</span>
+                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => fetchKpiDashboard()} disabled={kpiLoading}>
+                  {kpiLoading ? '↻ Loading...' : '↻ Refresh'}
+                </button>
+              </div>
+            </div>
+
+            {/* Loading skeleton */}
+            {kpiLoading && !kpiData && (
+              <>
+                <div className="kpi-health-grid">
+                  {[1,2,3,4].map((i) => <div key={i} className="kpi-skeleton kpi-health-skeleton" />)}
+                </div>
+                <div className="kpi-panels">
+                  <div className="kpi-skeleton kpi-panel-skeleton" />
+                  <div className="kpi-skeleton kpi-panel-skeleton" />
+                </div>
+              </>
+            )}
+
+            {/* Error */}
+            {kpiError && !kpiData && (
+              <div className="kpi-error">
+                <div className="kpi-error-emoji">⚠️</div>
+                <p>{kpiError}</p>
+                <button className="btn btn-ghost btn-sm" onClick={() => fetchKpiDashboard()} style={{ marginTop: '1rem' }}>
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {/* Dashboard content */}
+            {kpiData && (
+              <>
+                {/* ── Service Health Grid ── */}
+                <div className="kpi-health-grid">
+                  {(kpiData.services || []).map((svc) => (
+                    <div key={svc.name} className={`kpi-health-card kpi-status-${svc.status}`}>
+                      <div className="kpi-health-card-glow" />
+                      <div className="kpi-health-card-top">
+                        <span className="kpi-health-name">{svc.name}</span>
+                        <span className="kpi-health-dot" />
+                      </div>
+                      <span className="kpi-health-status">{svc.status}</span>
+                      {svc.latency_ms > 0 && (
+                        <div className="kpi-health-latency">{svc.latency_ms} ms</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── KPI Panels ── */}
+                <div className="kpi-panels">
+                  {/* Inventory Panel */}
+                  <div className="kpi-panel">
+                    <div className="kpi-panel-header">
+                      <div className="kpi-panel-icon inv-icon">🎫</div>
+                      <div>
+                        <div className="kpi-panel-title">Inventory</div>
+                        <div className="kpi-panel-subtitle">Ticket stock &amp; lifecycle</div>
+                      </div>
+                    </div>
+
+                    {kpiData.inventory ? (
+                      <>
+                        <div className="kpi-metrics-grid">
+                          <div className="kpi-metric-card">
+                            <div className="kpi-metric-label">Total Tickets</div>
+                            <div className="kpi-metric-value blue">{kpiData.inventory.counts?.total ?? 0}</div>
+                          </div>
+                          <div className="kpi-metric-card">
+                            <div className="kpi-metric-label">Available</div>
+                            <div className="kpi-metric-value success">{kpiData.inventory.counts?.available ?? 0}</div>
+                          </div>
+                          <div className="kpi-metric-card">
+                            <div className="kpi-metric-label">Reserved</div>
+                            <div className="kpi-metric-value warning">{kpiData.inventory.counts?.reserved ?? 0}</div>
+                          </div>
+                          <div className="kpi-metric-card">
+                            <div className="kpi-metric-label">Sold</div>
+                            <div className="kpi-metric-value accent">{kpiData.inventory.counts?.sold ?? 0}</div>
+                            <div className="kpi-metric-sub">
+                              {kpiData.inventory.counts?.used ?? 0} used
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Sell-Through Rate */}
+                        {(() => {
+                          const total = kpiData.inventory.counts?.total || 0;
+                          const sold = (kpiData.inventory.counts?.sold || 0) + (kpiData.inventory.counts?.used || 0);
+                          const pct = total > 0 ? Math.round((sold / total) * 100) : 0;
+                          return (
+                            <div className="kpi-gauge">
+                              <div className="kpi-gauge-header">
+                                <span className="kpi-gauge-label">Sell-Through Rate</span>
+                                <span className="kpi-gauge-value">{pct}%</span>
+                              </div>
+                              <div className="kpi-gauge-track">
+                                <div className="kpi-gauge-fill" style={{ width: `${pct}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Category Breakdown */}
+                        {kpiData.inventory.by_category && kpiData.inventory.by_category.length > 0 && (
+                          <div className="kpi-bar-chart" style={{ marginTop: '1.25rem' }}>
+                            <div className="kpi-bar-chart-title">By Category</div>
+                            {kpiData.inventory.by_category.map((cat) => {
+                              const maxCount = Math.max(
+                                ...kpiData.inventory.by_category.map((c) => c.counts?.total || 0),
+                                1
+                              );
+                              const pct = ((cat.counts?.total || 0) / maxCount) * 100;
+                              return (
+                                <div key={cat.category} className="kpi-bar-row">
+                                  <span className="kpi-bar-label" title={cat.category}>{cat.category}</span>
+                                  <div className="kpi-bar-track">
+                                    <div className="kpi-bar-fill" style={{ width: `${pct}%` }} />
+                                  </div>
+                                  <span className="kpi-bar-count">{cat.counts?.total || 0}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="kpi-unavailable">Inventory data unavailable</div>
+                    )}
+                  </div>
+
+                  {/* Payment Panel */}
+                  <div className="kpi-panel">
+                    <div className="kpi-panel-header">
+                      <div className="kpi-panel-icon pay-icon">💳</div>
+                      <div>
+                        <div className="kpi-panel-title">Payments</div>
+                        <div className="kpi-panel-subtitle">Revenue &amp; transactions</div>
+                      </div>
+                    </div>
+
+                    {kpiData.payments ? (
+                      <>
+                        <div className="kpi-metrics-grid kpi-metrics-grid-3">
+                          <div className="kpi-metric-card">
+                            <div className="kpi-metric-label">Confirmed Revenue</div>
+                            <div className="kpi-metric-value accent">
+                              €{((kpiData.payments.total_revenue_cents || 0) / 100).toFixed(2)}
+                            </div>
+                            {(kpiData.payments.total_pending_cents || 0) > 0 && (
+                              <div className="kpi-metric-sub">
+                                + €{((kpiData.payments.total_pending_cents || 0) / 100).toFixed(2)} pending
+                              </div>
+                            )}
+                            {(kpiData.payments.total_revenue_cents || 0) === 0 && (kpiData.payments.total_amount_cents || 0) > 0 && (
+                              <div className="kpi-metric-sub">
+                                €{((kpiData.payments.total_amount_cents || 0) / 100).toFixed(2)} total pipeline
+                              </div>
+                            )}
+                            <div className="kpi-metric-sub">{kpiData.payments.currency || 'EUR'}</div>
+                          </div>
+                          <div className="kpi-metric-card">
+                            <div className="kpi-metric-label">Payments</div>
+                            <div className="kpi-metric-value blue">{kpiData.payments.total_payments || 0}</div>
+                          </div>
+                          <div className="kpi-metric-card">
+                            <div className="kpi-metric-label">Customers</div>
+                            <div className="kpi-metric-value success">{kpiData.payments.total_customers || 0}</div>
+                          </div>
+                        </div>
+
+                        {kpiData.payments.total_refunded_cents > 0 && (
+                          <div className="kpi-metric-card" style={{ marginBottom: '1rem' }}>
+                            <div className="kpi-metric-label">Total Refunded</div>
+                            <div className="kpi-metric-value danger">
+                              €{((kpiData.payments.total_refunded_cents || 0) / 100).toFixed(2)}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Payment Status Donut */}
+                        {kpiData.payments.by_status && Object.keys(kpiData.payments.by_status).length > 0 && (() => {
+                          const statusColors = {
+                            succeeded: '#34d399', paid: '#34d399',
+                            pending: '#fbbf24', processing: '#fbbf24',
+                            requires_action: '#f59e0b',
+                            canceled: '#94a3b8', cancelled: '#94a3b8',
+                            refunded: '#f87171', partially_refunded: '#fb923c',
+                            failed: '#ef4444',
+                          };
+                          const entries = Object.entries(kpiData.payments.by_status)
+                            .map(([status, count]) => ({ status, count, color: statusColors[status] || '#64748b' }))
+                            .sort((a, b) => b.count - a.count);
+                          const total = entries.reduce((s, e) => s + e.count, 0) || 1;
+
+                          // Build conic-gradient
+                          let cumPct = 0;
+                          const gradientParts = entries.map((e) => {
+                            const startPct = cumPct;
+                            const endPct = cumPct + (e.count / total) * 100;
+                            cumPct = endPct;
+                            return `${e.color} ${startPct.toFixed(1)}% ${endPct.toFixed(1)}%`;
+                          });
+                          const gradient = `conic-gradient(${gradientParts.join(', ')})`;
+
+                          return (
+                            <div className="kpi-donut-section">
+                              <div className="kpi-donut-wrap">
+                                <div className="kpi-donut" style={{ background: gradient }}>
+                                  <div className="kpi-donut-center" style={{ background: 'var(--card-bg)', width: '70px', height: '70px', borderRadius: '50%', margin: 'auto', position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}>
+                                    <span className="kpi-donut-center-value">{total}</span>
+                                    <span className="kpi-donut-center-label">Total</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="kpi-donut-legend">
+                                {entries.map((e) => (
+                                  <div key={e.status} className="kpi-legend-item">
+                                    <span className="kpi-legend-dot" style={{ background: e.color }} />
+                                    <span className="kpi-legend-label">{e.status.replace(/_/g, ' ')}</span>
+                                    <span className="kpi-legend-count">{e.count}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    ) : (
+                      <div className="kpi-unavailable">Payment data unavailable</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Payment Debug Info */}
+                {kpiData.payments?._debug && kpiData.payments._debug.length > 0 && (
+                  <div style={{
+                    marginTop: '0.75rem',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '8px',
+                    background: 'rgba(6, 9, 15, 0.6)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                    fontSize: '0.75rem',
+                    fontFamily: 'monospace',
+                    color: 'var(--text-muted)',
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: '0.35rem', color: 'var(--text-soft)' }}>
+                      🔍 Payment API Debug
+                    </div>
+                    {kpiData.payments._debug.map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                  </div>
+                )}
+                {/* Generated at timestamp */}
+                {kpiData.generated_at && (
+                  <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Last snapshot: {new Date(kpiData.generated_at).toLocaleString()}
+                  </div>
+                )}
+
+                {/* ── API Call Log ── */}
+                {kpiData.recent_api_calls && kpiData.recent_api_calls.length > 0 && (
+                  <div className="kpi-api-log">
+                    <div className="kpi-api-log-header">
+                      <div className="kpi-api-log-title">
+                        <span>📡</span>
+                        <strong>Recent API Calls</strong>
+                      </div>
+                      <span className="kpi-api-log-count">{kpiData.recent_api_calls.length} calls</span>
+                    </div>
+                    <div className="kpi-api-table-wrap">
+                      <table className="kpi-api-table">
+                        <thead>
+                          <tr>
+                            <th>Time</th>
+                            <th>Method</th>
+                            <th>Service</th>
+                            <th>URL</th>
+                            <th>Status</th>
+                            <th style={{ textAlign: 'right' }}>Latency</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {kpiData.recent_api_calls.map((call, idx) => {
+                            const urlPath = (() => {
+                              try {
+                                const u = new URL(call.url);
+                                return u.pathname + u.search;
+                              } catch (_) {
+                                return call.url;
+                              }
+                            })();
+                            const methodLower = (call.method || 'GET').toLowerCase();
+                            const isOk = call.status >= 200 && call.status < 400;
+                            const timeStr = call.ts ? new Date(call.ts).toLocaleTimeString() : '';
+                            return (
+                              <tr key={idx}>
+                                <td style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{timeStr}</td>
+                                <td>
+                                  <span className={`kpi-api-method kpi-api-method-${methodLower}`}>
+                                    {call.method}
+                                  </span>
+                                </td>
+                                <td className="kpi-api-service">{call.service || '—'}</td>
+                                <td className="kpi-api-url" title={call.url}>{urlPath}</td>
+                                <td className={isOk ? 'kpi-api-status-ok' : 'kpi-api-status-err'}>
+                                  {call.status}
+                                </td>
+                                <td className="kpi-api-latency">{call.latency_ms} ms</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </section>
         )}
