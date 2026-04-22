@@ -670,11 +670,35 @@ async def list_events(request: Request, authorization: Optional[str] = Header(No
     if not is_admin:
         params["status"] = "published"
 
-    return await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events",
+    events_data = await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events",
                         headers=_inv_headers(request=request),
                         params=params,
                         service_label="Inventory Service",
                         request=request)
+
+    # Enrich each event with min_price from its tickets
+    if isinstance(events_data, dict) and isinstance(events_data.get("data"), list):
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for ev in events_data["data"]:
+                ev_id = ev.get("id")
+                if not ev_id:
+                    continue
+                try:
+                    t_resp = await client.get(
+                        f"{INVENTORY_SERVICE_URL}/api/v1/events/{ev_id}/tickets",
+                        headers=_inv_headers(request=request),
+                        params={"status": "available", "limit": 1},
+                    )
+                    if t_resp.status_code == 200:
+                        t_data = t_resp.json()
+                        tickets = t_data.get("data", [])
+                        if tickets:
+                            ev["min_price"] = str(tickets[0].get("price", "0"))
+                            ev["currency"] = str(tickets[0].get("currency", "EUR"))
+                except Exception:
+                    pass
+
+    return events_data
 
 
 @app.post("/api/events", summary="Criar evento", tags=["Events"])
@@ -1157,12 +1181,17 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         composer_cancel = f"{base_url}/api/checkout/cancel?tickets={ticket_ids_str}&frontend_url={frontend_cancel_encoded}"
 
         # 4. Criar Hosted Checkout Session no Payment Service
+        # Read the actual unit price from the reserved ticket (set during batch creation)
+        sample_ticket = reserved_tickets[0]
+        unit_price_value = Decimal(str(sample_ticket.get("price", "0")))
+        unit_price_cents = int((unit_price_value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
         pay_payload = {
             "line_items": [
                 {
                     "name": f"Event {order.event_id} Tickets",
                     "quantity": order.quantity,
-                    "price": int(order.amount_cents / order.quantity) if order.quantity > 0 else order.amount_cents
+                    "price": unit_price_cents
                 }
             ],
             "currency": "eur",

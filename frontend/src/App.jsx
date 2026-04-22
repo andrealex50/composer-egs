@@ -788,12 +788,14 @@ function App() {
     setFlowInfo('Redirecting to checkout...');
     setWalletActionUrl('');
     try {
+      const ev = events.find(e => e.id === eventId);
+      const minPriceCents = ev?.min_price ? Number(ev.min_price) * 100 : 1500;
       const payload = {
         event_id: eventId,
         quantity,
         success_url: window.location.href.split('?')[0] + '?status=success',
         cancel_url: window.location.href.split('?')[0] + '?status=cancel',
-        amount_cents: quantity * 1500,
+        amount_cents: quantity * minPriceCents,
       };
       const res = await axios.post(`${API_BASE_URL}/api/checkout`, payload, { headers: { Authorization: `Bearer ${token}` } });
       if (res.data?.checkout_url) {
@@ -837,8 +839,8 @@ function App() {
           event_id: eventId,
           name: eventObj?.name || existing?.name || 'Unnamed event',
           quantity: nextQty,
-          amount_cents_per_ticket: Number(existing?.amount_cents_per_ticket || 1500),
-          currency: String(existing?.currency || 'EUR').toUpperCase(),
+          amount_cents_per_ticket: Number(existing?.amount_cents_per_ticket || (eventObj?.min_price ? Number(eventObj.min_price) * 100 : 1500)),
+          currency: String(existing?.currency || eventObj?.currency || 'EUR').toUpperCase(),
         },
       };
     });
@@ -1230,7 +1232,7 @@ function App() {
                       <div className="event-card-footer">
                         <div className="event-price">
                           <span className="event-price-label">From</span>
-                          <span className="event-price-value">€15.00</span>
+                          <span className="event-price-value">{ev.min_price ? `€${Number(ev.min_price).toFixed(2)}` : 'TBD'}</span>
                         </div>
 
                         <div className="event-buy-group">
