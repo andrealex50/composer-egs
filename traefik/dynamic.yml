@@ -10,7 +10,15 @@ http:
       rule: Host(`auth.flashsale`)
       entryPoints:
         - web
+      priority: 10
       service: auth-svc
+
+    auth-ui:
+      rule: Host(`auth.flashsale`) && (PathPrefix(`/templates`) || PathPrefix(`/static`))
+      entryPoints:
+        - web
+      priority: 20
+      service: auth-ui-svc
 
     payment-auth:
       rule: Host(`payment-auth.flashsale`)
@@ -36,6 +44,24 @@ http:
         - web
       service: api@internal
 
+    grafana:
+      rule: Host(`grafana.flashsale`)
+      entryPoints:
+        - web
+      service: grafana-svc
+
+    vault:
+      rule: Host(`vault.flashsale`)
+      entryPoints:
+        - web
+      service: vault-svc
+
+    jaeger:
+      rule: Host(`jaeger.flashsale`)
+      entryPoints:
+        - web
+      service: jaeger-svc
+
   services:
     composer-svc:
       loadBalancer:
@@ -46,6 +72,11 @@ http:
       loadBalancer:
         servers:
           - url: http://auth-service:8000
+
+    auth-ui-svc:
+      loadBalancer:
+        servers:
+          - url: http://auth-frontend:80
 
     payment-auth-svc:
       loadBalancer:
@@ -61,3 +92,18 @@ http:
       loadBalancer:
         servers:
           - url: http://payment-service:8000
+
+    grafana-svc:
+      loadBalancer:
+        servers:
+          - url: http://grafana:3000
+
+    vault-svc:
+      loadBalancer:
+        servers:
+          - url: http://vault:8200
+
+    jaeger-svc:
+      loadBalancer:
+        servers:
+          - url: http://jaeger:16686

@@ -16,8 +16,48 @@ services:
     volumes:
       - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
     networks:
-      - flashsale
+      - edge-net
+      - services-net
+      - observability-net
     restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════
+  # HASHICORP VAULT — Secrets Management
+  # ═══════════════════════════════════════════════════════════════
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    expose:
+      - "8200"
+    networks:
+      - services-net
+    restart: unless-stopped
+
+  vault-init:
+    image: hashicorp/vault:1.15
+    container_name: vault-init
+    entrypoint: /bin/sh
+    command: ["/vault-init/init.sh"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
+      PAYMENT_ADMIN_API_KEY: ${PAYMENT_ADMIN_API_KEY:-admin-dev-key-2024}
+      PAYMENT_API_KEY: ${PAYMENT_API_KEY:-admin-dev-key-2024}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+    volumes:
+      - ./vault/init.sh:/vault-init/init.sh:ro
+    depends_on:
+      vault:
+        condition: service_started
+    networks:
+      - services-net
+    restart: "no"
 
   # ═══════════════════════════════════════════════════════════════
   # COMPOSER / API GATEWAY
@@ -40,6 +80,12 @@ services:
       INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-internal-dev-key-2024}
       EVENT_MUTATIONS_REQUIRE_ADMIN: ${EVENT_MUTATIONS_REQUIRE_ADMIN:-true}
       EVENT_ADMIN_ROLES: ${EVENT_ADMIN_ROLES:-admin,promoter}
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      OTEL_ENABLED: "true"
+      OTEL_SERVICE_NAME: composer
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_METRIC_EXPORT_INTERVAL_MS: 5000
     depends_on:
       auth-service:
         condition: service_started
@@ -47,13 +93,9 @@ services:
         condition: service_started
       payment-service:
         condition: service_started
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.composer.rule=Host(`composer.flashsale`)
-      - traefik.http.routers.composer.entrypoints=web
-      - traefik.http.services.composer.loadbalancer.server.port=8000
     networks:
-      - flashsale
+      - services-net
+      - observability-net
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════════════
@@ -81,18 +123,32 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       REFRESH_TOKEN_EXPIRE_DAYS: 7
       DEBUG: "False"
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      OTEL_ENABLED: "true"
+      OTEL_SERVICE_NAME: auth-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_METRIC_EXPORT_INTERVAL_MS: 5000
     depends_on:
       auth-postgres:
         condition: service_healthy
       auth-redis:
         condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.auth.rule=Host(`auth.flashsale`)
-      - traefik.http.routers.auth.entrypoints=web
-      - traefik.http.services.auth.loadbalancer.server.port=8000
     networks:
-      - flashsale
+      - services-net
+      - auth-db-net
+      - observability-net
+    restart: unless-stopped
+
+  auth-frontend:
+    image: nginx:1.27-alpine
+    container_name: auth-frontend
+    expose:
+      - "80"
+    volumes:
+      - ../EGS/frontend:/usr/share/nginx/html:ro
+    networks:
+      - services-net
     restart: unless-stopped
 
   auth-postgres:
@@ -110,7 +166,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - flashsale
+      - auth-db-net
 
   auth-redis:
     image: redis:7-alpine
@@ -121,7 +177,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - flashsale
+      - auth-db-net
 
   # ═══════════════════════════════════════════════════════════════
   # PAYMENT AUTH SERVICE + Postgres + Redis (For APalPay Accounts)
@@ -148,18 +204,21 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       REFRESH_TOKEN_EXPIRE_DAYS: 7
       DEBUG: "False"
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      OTEL_ENABLED: "true"
+      OTEL_SERVICE_NAME: payment-auth-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_METRIC_EXPORT_INTERVAL_MS: 5000
     depends_on:
       payment-auth-postgres:
         condition: service_healthy
       payment-auth-redis:
         condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.payment-auth.rule=Host(`payment-auth.flashsale`)
-      - traefik.http.routers.payment-auth.entrypoints=web
-      - traefik.http.services.payment-auth.loadbalancer.server.port=8000
     networks:
-      - flashsale
+      - services-net
+      - payment-auth-db-net
+      - observability-net
     restart: unless-stopped
 
   payment-auth-postgres:
@@ -177,7 +236,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - flashsale
+      - payment-auth-db-net
 
   payment-auth-redis:
     image: redis:7-alpine
@@ -188,7 +247,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - flashsale
+      - payment-auth-db-net
 
   # ═══════════════════════════════════════════════════════════════
   # INVENTORY SERVICE + Postgres + Redis
@@ -207,18 +266,21 @@ services:
       API_KEY: sk_test_inventory_dev_key
       RATE_LIMIT_PER_MINUTE: 120
       RESERVATION_TTL_MINUTES: 15
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      OTEL_ENABLED: "true"
+      OTEL_SERVICE_NAME: inventory-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_METRIC_EXPORT_INTERVAL_MS: 5000
     depends_on:
       inv-postgres:
         condition: service_healthy
       inv-redis:
         condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.inventory.rule=Host(`inventory.flashsale`)
-      - traefik.http.routers.inventory.entrypoints=web
-      - traefik.http.services.inventory.loadbalancer.server.port=8000
     networks:
-      - flashsale
+      - services-net
+      - inventory-db-net
+      - observability-net
     restart: unless-stopped
 
   inv-postgres:
@@ -236,7 +298,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - flashsale
+      - inventory-db-net
 
   inv-redis:
     image: redis:7-alpine
@@ -247,7 +309,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - flashsale
+      - inventory-db-net
 
   # ═══════════════════════════════════════════════════════════════
   # PAYMENT SERVICE + Postgres + Redis
@@ -273,6 +335,13 @@ services:
       RATE_LIMIT_REQUESTS: 100
       RATE_LIMIT_WINDOW_SECONDS: 60
       LOG_LEVEL: INFO
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      # OpenTelemetry — export to unified collector
+      OTEL_ENABLED: "true"
+      OTEL_SERVICE_NAME: payment-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_METRIC_EXPORT_INTERVAL_MS: 5000
     depends_on:
       pay-postgres:
         condition: service_healthy
@@ -280,13 +349,10 @@ services:
         condition: service_healthy
       payment-auth-service:
         condition: service_started
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.payment.rule=Host(`payment.flashsale`)
-      - traefik.http.routers.payment.entrypoints=web
-      - traefik.http.services.payment.loadbalancer.server.port=8000
     networks:
-      - flashsale
+      - services-net
+      - payment-db-net
+      - observability-net
     restart: unless-stopped
 
   pay-postgres:
@@ -304,7 +370,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      flashsale:
+      payment-db-net:
         aliases:
           - postgres
 
@@ -317,14 +383,107 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - flashsale
+      - payment-db-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # OBSERVABILITY STACK (unified for all services)
+  # ═══════════════════════════════════════════════════════════════
+
+  # ── OpenTelemetry Collector ─────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    expose:
+      - "4317"
+      - "4318"
+      - "8889"
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  # ── Jaeger (Distributed Tracing UI) ─────────
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    expose:
+      - "16686"
+      - "4317"
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  # ── Prometheus (Metrics Storage) ────────────
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    expose:
+      - "9090"
+    depends_on:
+      - otel-collector
+    restart: unless-stopped
+    networks:
+      - observability-net
+
+  # ── Grafana (Dashboards & Visualization) ────
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    expose:
+      - "3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - observability-net
 
 volumes:
   auth_pg_data:
   inv_pg_data_fresh:
   pay_pg_data_fresh:
   payment_auth_pg_data_fresh:
+  prometheus_data:
+  grafana_data:
 
+# ═══════════════════════════════════════════════════════════════
+# NETWORKS — fully internal service nets + isolated per-service DB nets
+# ═══════════════════════════════════════════════════════════════
 networks:
-  flashsale:
-    driver: bridge
+  # Public edge network used only by Traefik for host port binding.
+  edge-net:
+
+  # Internal east-west service network. Only Traefik publishes a host port.
+  services-net:
+    internal: true
+
+  # Per-service database networks — fully internal, no internet access
+  auth-db-net:
+    internal: true
+
+  payment-auth-db-net:
+    internal: true
+
+  inventory-db-net:
+    internal: true
+
+  payment-db-net:
+    internal: true
+
+  # Observability network — internal, connects all services to monitoring
+  observability-net:
+    internal: true

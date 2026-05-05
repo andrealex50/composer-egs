@@ -185,6 +185,8 @@ uvicorn main:app --reload --port 8080
 | `PAYMENT_API_KEY` | `your-secret-api-key` | API Key para o Payment |
 | `PAYMENT_ADMIN_API_KEY` | `admin-dev-key-2024` | Admin key bootstrap do Payment Service |
 | `INTERNAL_SERVICE_KEY` | `internal-dev-key-2024` | Chave interna para chamadas service-to-service ao Auth `/verify` |
+| `STRIPE_SECRET_KEY` | `sk_test_placeholder` | Secret key usada pelo Payment Service em dev |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_placeholder` | Webhook signing secret usado pelo Payment Service em dev |
 | `EVENT_MUTATIONS_REQUIRE_ADMIN` | `true` | Se `true`, criar/editar/apagar eventos e criar tickets exige utilizador com role autorizada |
 | `EVENT_ADMIN_ROLES` | `admin,promoter` | Lista de roles permitidas para mutações de eventos (separadas por vírgula) |
 
@@ -194,11 +196,29 @@ uvicorn main:app --reload --port 8080
 
 > **Nota:** O gateway também preserva `X-Request-ID` e `X-Correlation-ID` quando encaminha pedidos para troubleshooting distribuído.
 
+### Redes, segredos e observabilidade
+
+O stack Docker fica fechado por defeito:
+
+- Só o Traefik publica porta no host (`80:80`).
+- `edge-net` é usada apenas pelo Traefik para fazer bind da porta pública.
+- `services-net` é uma rede interna para tráfego entre APIs, Traefik, Vault e frontends internos.
+- Cada serviço com base de dados tem a sua própria rede interna: `auth-db-net`, `payment-auth-db-net`, `inventory-db-net` e `payment-db-net`.
+- As bases de dados e caches ficam apenas na rede privada do seu serviço; por exemplo, `auth-postgres` não partilha rede com `pay-postgres` nem com `inv-postgres`.
+- `observability-net` é interna e liga os serviços ao OpenTelemetry Collector, Prometheus, Jaeger e Grafana.
+- O Vault corre em `vault` e é inicializado por `vault-init`, que grava os segredos dev em paths como `secret/auth`, `secret/inventory`, `secret/payment` e `secret/composer`.
+
+As KPIs e métricas ficam centralizadas no mesmo Grafana:
+
+- Grafana: [http://grafana.flashsale](http://grafana.flashsale)
+- Jaeger: [http://jaeger.flashsale](http://jaeger.flashsale)
+- Vault: [http://vault.flashsale](http://vault.flashsale)
+
 ### Auth API-only + Password Reset
 
 O Auth Service deixou de servir templates server-side. Os links de reset devem apontar para o frontend separado da equipa de auth, configurado por `AUTH_FRONTEND_PUBLIC_BASE_URL` + `AUTH_PASSWORD_RESET_LINK_PATH`.
 
-O frontend estático do auth que está no repositório EGS chama a API diretamente em `http://auth.flashsale/api/v1`. Por isso, este `docker-compose.yml` publica apenas o Traefik na porta `80` e já inclui `http://localhost:5500`/`http://127.0.0.1:5500` em `AUTH_BACKEND_CORS_ORIGINS`.
+O frontend estático do auth que está no repositório EGS chama a API diretamente em `http://auth.flashsale/api/v1`. Este `docker-compose.yml` serve essa UI em `http://auth.flashsale/templates/...` através do serviço `auth-frontend`; a API continua no mesmo host em `/api/v1`. Só o Traefik é publicado na porta `80`, e `http://localhost:5500`/`http://127.0.0.1:5500` continuam em `AUTH_BACKEND_CORS_ORIGINS` para desenvolvimento local da UI.
 
 Usar o mesmo Auth Service não implica juntar os fluxos de negócio de FlashSale e Payment. O Auth centraliza identidade; cada serviço continua a ter as suas próprias regras, permissões e onboarding.
 
@@ -648,19 +668,22 @@ REFUND:
 
 ## 🐳 Docker Compose — Containers
 
-O `docker-compose.yml` unificado sobe **10 containers**:
+O `docker-compose.yml` unificado sobe o gateway, os serviços de negócio, bases de dados isoladas, Vault e observabilidade:
 
-| Container | Serviço | Porta Externa |
-|-----------|---------|---------------|
-| `composer` | API Gateway | 8080 |
-| `auth-service` | Auth API | 8000 |
-| `auth-postgres` | Auth DB | — |
-| `auth-redis` | Auth Cache | — |
-| `inventory-service` | Inventory API | — (interna) |
-| `inv-postgres` | Inventory DB | — |
-| `inv-redis` | Inventory Cache | — |
-| `payment-service` | Payment API + Wallet UI | 8002 |
-| `pay-postgres` | Payment DB | — |
-| `pay-redis` | Payment Cache | — |
+| Container | Serviço | Porta externa |
+|-----------|---------|----------------|
+| `traefik` | Edge proxy | `80` |
+| `composer` | API Gateway | — |
+| `auth-service` | Auth API | — |
+| `auth-frontend` | UI estática do Auth | — |
+| `payment-auth-service` | Auth API dedicado ao Payment | — |
+| `inventory-service` | Inventory API | — |
+| `payment-service` | Payment API + Wallet UI | — |
+| `vault` / `vault-init` | HashiCorp Vault + bootstrap dev de segredos | — |
+| `otel-collector` | OpenTelemetry Collector | — |
+| `prometheus` | Métricas | — |
+| `grafana` | Dashboards unificados | — |
+| `jaeger` | Distributed tracing | — |
+| `*-postgres` / `*-redis` | Persistência e cache por serviço | — |
 
-O Composer expõe `8080`, o Auth expõe `8000` para os templates estáticos da equipa de auth, e o Payment expõe `8002` para a wallet UI e para o hosted checkout. O resto comunica pela rede interna `flashsale`.
+Só o Traefik publica porta no host. Composer, Auth, Inventory, Payment, Vault, Grafana e Jaeger são acedidos pelos hosts `*.flashsale` configurados no Traefik; as bases de dados e caches nunca entram na rede partilhada entre serviços.
