@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import math
 import os
 import time
 import uuid
@@ -1619,9 +1620,106 @@ async def _fetch_inventory_kpi(client: httpx.AsyncClient) -> dict:
     return None
 
 
+async def _fetch_auth_kpi(client: httpx.AsyncClient) -> dict:
+    """Fetch auth KPI snapshot from the Auth Service."""
+    try:
+        r = await client.get(
+            f"{AUTH_SERVICE_URL}/internal/kpi/snapshot",
+            headers={"X-Internal-Service-Key": INTERNAL_SERVICE_KEY},
+        )
+        if r.status_code == 200:
+            return r.json()
+        return {
+            "enabled": False,
+            "users": {"total": 0, "active": 0, "inactive": 0, "by_role": {}},
+            "_debug": [f"auth-kpi: HTTP {r.status_code}", r.text[:300]],
+        }
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "users": {"total": 0, "active": 0, "inactive": 0, "by_role": {}},
+            "_debug": [f"auth-kpi exception: {exc}"],
+        }
+
+
+def _empty_payment_kpi(debug_info: list[str] | None = None) -> dict:
+    return {
+        "total_payments": 0,
+        "total_revenue_cents": 0,
+        "total_pending_cents": 0,
+        "total_amount_cents": 0,
+        "total_refunded_cents": 0,
+        "currency": "EUR",
+        "total_customers": 0,
+        "active_customers": 0,
+        "by_status": {},
+        "by_currency": {},
+        "customers": {"total": 0, "active": 0},
+        "checkout_sessions": {"total": 0, "by_status": {}},
+        "_debug": debug_info or [],
+    }
+
+
+def _normalize_payment_kpi_snapshot(payload: dict, debug_info: list[str] | None = None) -> dict:
+    """Normalize Payment's internal KPI payload into the dashboard contract."""
+    if not isinstance(payload, dict):
+        return _empty_payment_kpi((debug_info or []) + ["payment-kpi payload was not an object"])
+
+    payments = payload.get("payments") if isinstance(payload.get("payments"), dict) else payload
+    customers = payload.get("customers") if isinstance(payload.get("customers"), dict) else {}
+    checkout_sessions = payload.get("checkout_sessions") if isinstance(payload.get("checkout_sessions"), dict) else {}
+
+    status_counts = payments.get("by_status") if isinstance(payments.get("by_status"), dict) else {}
+    status_counts = {
+        str(status_name).lower(): int(count or 0)
+        for status_name, count in status_counts.items()
+    }
+    by_currency = payments.get("by_currency") if isinstance(payments.get("by_currency"), dict) else {}
+
+    total_customers = int(customers.get("total") or payload.get("total_customers") or 0)
+    active_customers = (
+        int(customers.get("active") or 0)
+        if customers.get("active") is not None
+        else total_customers
+    )
+
+    return {
+        "total_payments": int(payments.get("total_payments") or 0),
+        "total_revenue_cents": int(payments.get("total_revenue_cents") or 0),
+        "total_pending_cents": int(payments.get("total_pending_cents") or 0),
+        "total_amount_cents": int(payments.get("total_amount_cents") or 0),
+        "total_refunded_cents": int(payments.get("total_refunded_cents") or 0),
+        "currency": str(payments.get("currency") or "EUR").upper(),
+        "total_customers": total_customers,
+        "active_customers": active_customers,
+        "by_status": status_counts,
+        "by_currency": by_currency,
+        "customers": {
+            "total": total_customers,
+            "active": active_customers,
+        },
+        "checkout_sessions": checkout_sessions,
+        "_debug": debug_info or [],
+    }
+
+
 async def _fetch_payment_kpi(client: httpx.AsyncClient) -> dict:
-    """Aggregate payment KPIs from the Payment Service API."""
+    """Fetch Payment KPIs, preferring the internal snapshot endpoint."""
     debug_info = []
+
+    try:
+        snapshot_resp = await client.get(
+            f"{PAYMENT_SERVICE_URL}/internal/kpi/snapshot",
+            headers={"X-API-Key": PAYMENT_API_KEY},
+        )
+        debug_info.append(f"internal-snapshot: HTTP {snapshot_resp.status_code}")
+        if snapshot_resp.status_code == 200:
+            return _normalize_payment_kpi_snapshot(snapshot_resp.json(), debug_info)
+        debug_info.append(f"internal-snapshot body: {snapshot_resp.text[:300]}")
+    except Exception as exc:
+        debug_info.append(f"internal-snapshot exception: {exc}")
+
+    # Backward-compatible fallback for older Payment images.
     try:
         # Fetch payments in pages of 100 (Payment Service max limit)
         all_items = []
@@ -1702,21 +1800,251 @@ async def _fetch_payment_kpi(client: httpx.AsyncClient) -> dict:
             "total_refunded_cents": total_refunded_cents,
             "currency": next(iter(currencies_seen), "EUR"),
             "total_customers": total_customers,
+            "active_customers": total_customers,
             "by_status": status_counts,
+            "by_currency": {},
+            "customers": {"total": total_customers, "active": total_customers},
+            "checkout_sessions": {"total": 0, "by_status": {}},
             "_debug": debug_info,
         }
     except Exception as exc:
-        return {
-            "total_payments": 0,
-            "total_revenue_cents": 0,
-            "total_pending_cents": 0,
-            "total_amount_cents": 0,
-            "total_refunded_cents": 0,
-            "currency": "EUR",
-            "total_customers": 0,
-            "by_status": {},
-            "_debug": debug_info + [f"exception: {exc}"],
-        }
+        return _empty_payment_kpi(debug_info + [f"fallback exception: {exc}"])
+
+
+async def _build_platform_kpi_snapshot() -> dict:
+    generated_at = datetime.now(tz=timezone.utc).isoformat()
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        (
+            auth_health,
+            inv_health,
+            pay_health,
+            auth_kpi,
+            inv_kpi,
+            pay_kpi,
+        ) = await asyncio.gather(
+            _fetch_service_health(client, "auth", f"{AUTH_SERVICE_URL}/health"),
+            _fetch_service_health(client, "inventory", f"{INVENTORY_SERVICE_URL}/health"),
+            _fetch_service_health(client, "payment", f"{PAYMENT_SERVICE_URL}/health"),
+            _fetch_auth_kpi(client),
+            _fetch_inventory_kpi(client),
+            _fetch_payment_kpi(client),
+        )
+
+    services_health = [
+        {"name": "composer", "status": "online", "latency_ms": 0},
+        auth_health,
+        inv_health,
+        pay_health,
+    ]
+    all_online = all(s["status"] == "online" for s in services_health)
+
+    return {
+        "generated_at": generated_at,
+        "overall_status": "healthy" if all_online else "degraded",
+        "services": services_health,
+        "auth": auth_kpi,
+        "inventory": inv_kpi,
+        "payments": pay_kpi,
+        "recent_api_calls": list(_API_CALL_LOG),
+    }
+
+
+def _prom_label(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def _prom_label_set(labels: dict[str, object] | None = None) -> str:
+    if not labels:
+        return ""
+    rendered = ",".join(f'{key}="{_prom_label(value)}"' for key, value in sorted(labels.items()))
+    return "{" + rendered + "}"
+
+
+def _prom_number(value: object) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.0
+    if not math.isfinite(number):
+        number = 0.0
+    if number.is_integer():
+        return str(int(number))
+    return str(number)
+
+
+def _metric(lines: list[str], name: str, value: object, labels: dict[str, object] | None = None) -> None:
+    lines.append(f"{name}{_prom_label_set(labels)} {_prom_number(value)}")
+
+
+def _status_bucket(status_code: object) -> str:
+    try:
+        code = int(status_code)
+    except (TypeError, ValueError):
+        return "unknown"
+    return f"{code // 100}xx"
+
+
+def _render_prometheus_metrics(snapshot: dict) -> str:
+    lines: list[str] = []
+
+    lines.extend([
+        "# HELP flashsale_service_up Service online status from Composer checks.",
+        "# TYPE flashsale_service_up gauge",
+    ])
+    for service in snapshot.get("services", []):
+        _metric(
+            lines,
+            "flashsale_service_up",
+            1 if service.get("status") == "online" else 0,
+            {"service": service.get("name", "unknown"), "status": service.get("status", "unknown")},
+        )
+
+    lines.extend([
+        "# HELP flashsale_service_latency_ms Latest downstream health latency in milliseconds.",
+        "# TYPE flashsale_service_latency_ms gauge",
+    ])
+    for service in snapshot.get("services", []):
+        _metric(
+            lines,
+            "flashsale_service_latency_ms",
+            service.get("latency_ms", 0),
+            {"service": service.get("name", "unknown")},
+        )
+
+    auth_kpi = snapshot.get("auth") or {}
+    users = auth_kpi.get("users") if isinstance(auth_kpi.get("users"), dict) else {}
+    lines.extend([
+        "# HELP flashsale_auth_users_total Total users known by Auth.",
+        "# TYPE flashsale_auth_users_total gauge",
+    ])
+    _metric(lines, "flashsale_auth_users_total", users.get("total", 0))
+    lines.extend([
+        "# HELP flashsale_auth_users_active Active users known by Auth.",
+        "# TYPE flashsale_auth_users_active gauge",
+    ])
+    _metric(lines, "flashsale_auth_users_active", users.get("active", 0))
+    lines.extend([
+        "# HELP flashsale_auth_users_inactive Inactive users known by Auth.",
+        "# TYPE flashsale_auth_users_inactive gauge",
+    ])
+    _metric(lines, "flashsale_auth_users_inactive", users.get("inactive", 0))
+    lines.extend([
+        "# HELP flashsale_auth_users_by_role Users grouped by Auth role.",
+        "# TYPE flashsale_auth_users_by_role gauge",
+    ])
+    by_role = users.get("by_role") if isinstance(users.get("by_role"), dict) else {}
+    for role, count in by_role.items():
+        _metric(lines, "flashsale_auth_users_by_role", count, {"role": role})
+
+    inventory = snapshot.get("inventory") or {}
+    inv_counts = inventory.get("counts") if isinstance(inventory.get("counts"), dict) else {}
+    lines.extend([
+        "# HELP flashsale_inventory_tickets_total Total tickets known by Inventory.",
+        "# TYPE flashsale_inventory_tickets_total gauge",
+    ])
+    _metric(lines, "flashsale_inventory_tickets_total", inv_counts.get("total", 0))
+    lines.extend([
+        "# HELP flashsale_inventory_tickets Tickets grouped by Inventory status.",
+        "# TYPE flashsale_inventory_tickets gauge",
+    ])
+    for status_name in ("available", "reserved", "sold", "used"):
+        _metric(lines, "flashsale_inventory_tickets", inv_counts.get(status_name, 0), {"status": status_name})
+    lines.extend([
+        "# HELP flashsale_inventory_tickets_by_category Tickets grouped by category and status.",
+        "# TYPE flashsale_inventory_tickets_by_category gauge",
+    ])
+    for item in inventory.get("by_category", []) or []:
+        category = item.get("category", "unknown")
+        category_counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
+        for status_name in ("available", "reserved", "sold", "used"):
+            _metric(
+                lines,
+                "flashsale_inventory_tickets_by_category",
+                category_counts.get(status_name, 0),
+                {"category": category, "status": status_name},
+            )
+
+    payments = snapshot.get("payments") or {}
+    lines.extend([
+        "# HELP flashsale_payment_payments_total Total payments known by Payment.",
+        "# TYPE flashsale_payment_payments_total gauge",
+    ])
+    _metric(lines, "flashsale_payment_payments_total", payments.get("total_payments", 0))
+    lines.extend([
+        "# HELP flashsale_payment_payments_by_status Payments grouped by status.",
+        "# TYPE flashsale_payment_payments_by_status gauge",
+    ])
+    by_status = payments.get("by_status") if isinstance(payments.get("by_status"), dict) else {}
+    for status_name, count in by_status.items():
+        _metric(lines, "flashsale_payment_payments_by_status", count, {"status": status_name})
+    lines.extend([
+        "# HELP flashsale_payment_amount_cents Payment amounts in the smallest currency unit.",
+        "# TYPE flashsale_payment_amount_cents gauge",
+    ])
+    for amount_type, key in {
+        "total": "total_amount_cents",
+        "revenue": "total_revenue_cents",
+        "pending": "total_pending_cents",
+        "refunded": "total_refunded_cents",
+    }.items():
+        _metric(
+            lines,
+            "flashsale_payment_amount_cents",
+            payments.get(key, 0),
+            {"type": amount_type, "currency": payments.get("currency", "EUR")},
+        )
+    lines.extend([
+        "# HELP flashsale_payment_customers_total Total customers known by Payment.",
+        "# TYPE flashsale_payment_customers_total gauge",
+    ])
+    _metric(lines, "flashsale_payment_customers_total", payments.get("total_customers", 0))
+    lines.extend([
+        "# HELP flashsale_payment_customers_active Active customers known by Payment.",
+        "# TYPE flashsale_payment_customers_active gauge",
+    ])
+    _metric(lines, "flashsale_payment_customers_active", payments.get("active_customers", 0))
+
+    checkout_sessions = payments.get("checkout_sessions") if isinstance(payments.get("checkout_sessions"), dict) else {}
+    lines.extend([
+        "# HELP flashsale_payment_checkout_sessions_total Total checkout sessions known by Payment.",
+        "# TYPE flashsale_payment_checkout_sessions_total gauge",
+    ])
+    _metric(lines, "flashsale_payment_checkout_sessions_total", checkout_sessions.get("total", 0))
+    checkout_by_status = checkout_sessions.get("by_status") if isinstance(checkout_sessions.get("by_status"), dict) else {}
+    lines.extend([
+        "# HELP flashsale_payment_checkout_sessions_by_status Checkout sessions grouped by status.",
+        "# TYPE flashsale_payment_checkout_sessions_by_status gauge",
+    ])
+    for status_name, details in checkout_by_status.items():
+        count = details.get("count", 0) if isinstance(details, dict) else details
+        _metric(lines, "flashsale_payment_checkout_sessions_by_status", count, {"status": status_name})
+
+    recent_calls = snapshot.get("recent_api_calls", [])
+    lines.extend([
+        "# HELP flashsale_composer_recent_api_calls Recent Composer proxy calls kept in memory.",
+        "# TYPE flashsale_composer_recent_api_calls gauge",
+    ])
+    _metric(lines, "flashsale_composer_recent_api_calls", len(recent_calls))
+    by_service_bucket: dict[tuple[str, str], int] = {}
+    for call in recent_calls:
+        key = (str(call.get("service") or "unknown"), _status_bucket(call.get("status")))
+        by_service_bucket[key] = by_service_bucket.get(key, 0) + 1
+    lines.extend([
+        "# HELP flashsale_composer_recent_api_calls_by_status Recent Composer proxy calls grouped by service and status class.",
+        "# TYPE flashsale_composer_recent_api_calls_by_status gauge",
+    ])
+    for (service_name, status_class), count in by_service_bucket.items():
+        _metric(
+            lines,
+            "flashsale_composer_recent_api_calls_by_status",
+            count,
+            {"service": service_name, "status_class": status_class},
+        )
+
+    return "\n".join(lines) + "\n"
 
 
 @app.get("/api/kpi/dashboard", summary="KPI Observability Dashboard", tags=["KPI"])
@@ -1734,42 +2062,17 @@ async def kpi_dashboard(request: Request, authorization: Optional[str] = Header(
     if role not in EVENT_ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
 
-    generated_at = datetime.now(tz=timezone.utc).isoformat()
+    return await _build_platform_kpi_snapshot()
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        # Run all fetches in parallel
-        (
-            auth_health,
-            inv_health,
-            pay_health,
-            inv_kpi,
-            pay_kpi,
-        ) = await asyncio.gather(
-            _fetch_service_health(client, "auth", f"{AUTH_SERVICE_URL}/health"),
-            _fetch_service_health(client, "inventory", f"{INVENTORY_SERVICE_URL}/health"),
-            _fetch_service_health(client, "payment", f"{PAYMENT_SERVICE_URL}/health"),
-            _fetch_inventory_kpi(client),
-            _fetch_payment_kpi(client),
-        )
 
-    # Build composer self-status
-    services_health = [
-        {"name": "composer", "status": "online", "latency_ms": 0},
-        auth_health,
-        inv_health,
-        pay_health,
-    ]
-
-    all_online = all(s["status"] == "online" for s in services_health)
-
-    return {
-        "generated_at": generated_at,
-        "overall_status": "healthy" if all_online else "degraded",
-        "services": services_health,
-        "inventory": inv_kpi,
-        "payments": pay_kpi,
-        "recent_api_calls": list(_API_CALL_LOG),
-    }
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus scrape endpoint with KPIs aggregated through Composer."""
+    snapshot = await _build_platform_kpi_snapshot()
+    return Response(
+        content=_render_prometheus_metrics(snapshot),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
