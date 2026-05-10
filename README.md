@@ -203,7 +203,7 @@ O stack Docker fica fechado por defeito:
 - Só o Traefik publica porta no host (`80:80`).
 - `edge-net` é usada apenas pelo Traefik para fazer bind da porta pública.
 - `services-net` é uma rede interna para tráfego entre APIs, Traefik, Vault e frontends internos.
-- Cada serviço com base de dados tem a sua própria rede interna: `auth-db-net`, `payment-auth-db-net`, `inventory-db-net` e `payment-db-net`.
+- Cada serviço com base de dados tem a sua própria rede interna: `auth-db-net`, `inventory-db-net` e `payment-db-net`.
 - As bases de dados e caches ficam apenas na rede privada do seu serviço; por exemplo, `auth-postgres` não partilha rede com `pay-postgres` nem com `inv-postgres`.
 - `observability-net` é interna e liga os serviços ao OpenTelemetry Collector, Prometheus, Jaeger e Grafana.
 - O Vault corre em `vault` e é inicializado por `vault-init`, que grava os segredos dev em paths como `secret/auth`, `secret/inventory`, `secret/payment` e `secret/composer`.
@@ -676,7 +676,6 @@ O `docker-compose.yml` unificado sobe o gateway, os serviços de negócio, bases
 | `composer` | API Gateway | — |
 | `auth-service` | Auth API | — |
 | `auth-frontend` | UI estática do Auth | — |
-| `payment-auth-service` | Auth API dedicado ao Payment | — |
 | `inventory-service` | Inventory API | — |
 | `payment-service` | Payment API + Wallet UI | — |
 | `vault` / `vault-init` | HashiCorp Vault + bootstrap dev de segredos | — |
