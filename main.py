@@ -90,17 +90,31 @@ app.add_middleware(
 # API Call Tracker — ring buffer for the KPI dashboard
 # ---------------------------------------------------------------------------
 _API_CALL_LOG: collections.deque = collections.deque(maxlen=50)
+_API_CALL_TOTALS: collections.Counter = collections.Counter()
+
+
+def _api_call_path(url: str) -> str:
+    """Return a stable path label for Composer proxied calls."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        return parsed.path or "/"
+    except Exception:
+        return str(url).split("?", 1)[0] or "unknown"
 
 
 def _record_api_call(method: str, url: str, status_code: int, latency_ms: float, service: str = ""):
     """Record a proxy API call for observability."""
+    status_class = _status_bucket(status_code)
+    service_name = service or "unknown"
+    method_name = method.upper()
+    _API_CALL_TOTALS[(service_name, method_name, _api_call_path(url), status_class)] += 1
     _API_CALL_LOG.appendleft({
         "ts": datetime.now(tz=timezone.utc).isoformat(),
-        "method": method.upper(),
+        "method": method_name,
         "url": url,
         "status": status_code,
         "latency_ms": round(latency_ms, 1),
-        "service": service,
+        "service": service_name,
     })
 
 
@@ -2042,6 +2056,22 @@ def _render_prometheus_metrics(snapshot: dict) -> str:
             "flashsale_composer_recent_api_calls_by_status",
             count,
             {"service": service_name, "status_class": status_class},
+        )
+    lines.extend([
+        "# HELP flashsale_composer_api_calls_total Total Composer proxied API calls since this Composer pod started.",
+        "# TYPE flashsale_composer_api_calls_total counter",
+    ])
+    for (service_name, method_name, path, status_class), count in sorted(_API_CALL_TOTALS.items()):
+        _metric(
+            lines,
+            "flashsale_composer_api_calls_total",
+            count,
+            {
+                "service": service_name,
+                "method": method_name,
+                "path": path,
+                "status_class": status_class,
+            },
         )
 
     return "\n".join(lines) + "\n"
