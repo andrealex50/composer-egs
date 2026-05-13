@@ -20,6 +20,12 @@ http:
       priority: 20
       service: auth-ui-svc
 
+    payment-auth:
+      rule: Host(`payment-auth.flashsale`)
+      entryPoints:
+        - web
+      service: payment-auth-svc
+
     inventory:
       rule: Host(`inventory.flashsale`)
       entryPoints:
@@ -71,6 +77,11 @@ http:
       loadBalancer:
         servers:
           - url: http://auth-frontend:80
+
+    payment-auth-svc:
+      loadBalancer:
+        servers:
+          - url: http://payment-auth-service:8000
 
     inventory-svc:
       loadBalancer:
