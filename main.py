@@ -364,6 +364,12 @@ def _inv_headers(
     return _with_trace_headers(h, request)
 
 
+def _with_fresh_idempotency_key(headers: dict) -> dict:
+    refreshed = dict(headers)
+    refreshed["Idempotency-Key"] = str(uuid.uuid4())
+    return refreshed
+
+
 def _pay_headers(idempotency_key: str | None = None, request: Request | None = None) -> dict:
     """Headers de autenticação para o Payment Service."""
     h: dict = {"X-API-Key": PAYMENT_API_KEY}
@@ -878,7 +884,7 @@ async def create_reservation(request: Request, authorization: Optional[str] = He
     if not event_id:
         raise HTTPException(status_code=422, detail="event_id é obrigatório")
 
-    inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
+    inv_headers = _inv_headers(authorization, request=request)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         event_resp = await client.get(
@@ -914,7 +920,10 @@ async def create_reservation(request: Request, authorization: Optional[str] = He
         
         reserved_tickets = []
         for t in available[:quantity]:
-            r = await client.put(f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{t['id']}/reserve", headers=inv_headers)
+            r = await client.put(
+                f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{t['id']}/reserve",
+                headers=_with_fresh_idempotency_key(inv_headers),
+            )
             if r.status_code == 200:
                 reserved_tickets.append(r.json())
         
@@ -923,7 +932,7 @@ async def create_reservation(request: Request, authorization: Optional[str] = He
                 await _cancel_reserved_ticket(
                     client,
                     rt["id"],
-                    inv_headers,
+                    _with_fresh_idempotency_key(inv_headers),
                     service_label="Inventory Service",
                 )
             raise HTTPException(status_code=409, detail="Concorrência: Falha ao reservar")
@@ -1152,7 +1161,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
             )
 
         # 2. Reservar bilhetes no Inventory Service
-        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
+        inv_headers = _inv_headers(authorization, request=request)
         
         res = await client.get(
             f"{INVENTORY_SERVICE_URL}/api/v1/events/{order.event_id}/tickets",
@@ -1171,7 +1180,10 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
             
         reserved_tickets = []
         for t in available[:order.quantity]:
-            r = await client.put(f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{t['id']}/reserve", headers=inv_headers)
+            r = await client.put(
+                f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{t['id']}/reserve",
+                headers=_with_fresh_idempotency_key(inv_headers),
+            )
             if r.status_code == 200:
                 reserved_tickets.append(r.json())
                 
@@ -1180,7 +1192,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
                 await _cancel_reserved_ticket(
                     client,
                     rt["id"],
-                    inv_headers,
+                    _with_fresh_idempotency_key(inv_headers),
                     service_label="Inventory Service",
                 )
             raise HTTPException(status_code=409, detail="Falha concorrência.")
@@ -1233,7 +1245,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
                 await _cancel_reserved_ticket(
                     client,
                     tid,
-                    inv_headers,
+                    _with_fresh_idempotency_key(inv_headers),
                     service_label="Inventory Service",
                 )
             raise HTTPException(status_code=400, detail="Erro ao criar checkout session")
@@ -1246,6 +1258,7 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
         if isinstance(checkout_url, str) and checkout_url:
             payload["checkout_url"] = _append_query_params(checkout_url, {"force_auth": "1"})
 
+        payload["ticket_count"] = len(ticket_ids)
         return payload
 
 
@@ -1264,7 +1277,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
         if not user_email:
             raise HTTPException(status_code=401, detail="Sessão inválida: email em falta")
 
-        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
+        inv_headers = _inv_headers(authorization, request=request)
         reserved_ticket_ids: list[str] = []
         line_items: list[dict] = []
         checkout_currency: str | None = None
@@ -1275,7 +1288,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(status_code=400, detail="Quantidade inválida no carrinho")
@@ -1289,7 +1302,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(status_code=404, detail=f"Evento não encontrado: {item.event_id}")
@@ -1298,7 +1311,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(status_code=500, detail="Erro Inventory")
@@ -1309,7 +1322,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(
@@ -1327,7 +1340,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(status_code=500, detail="Erro Inventory")
@@ -1345,7 +1358,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(status_code=409, detail="Esgotado ou indisponível.")
@@ -1354,7 +1367,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
             for ticket in available[:item.quantity]:
                 reserve_resp = await client.put(
                     f"{INVENTORY_SERVICE_URL}/api/v1/tickets/{ticket['id']}/reserve",
-                    headers=inv_headers,
+                    headers=_with_fresh_idempotency_key(inv_headers),
                 )
                 if reserve_resp.status_code == 200:
                     item_reserved_tickets.append(reserve_resp.json())
@@ -1364,14 +1377,14 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         reserved["id"],
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 for tid in reserved_ticket_ids:
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(status_code=409, detail="Falha concorrência.")
@@ -1388,14 +1401,14 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                     await _cancel_reserved_ticket(
                         client,
                         reserved["id"],
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 for tid in reserved_ticket_ids:
                     await _cancel_reserved_ticket(
                         client,
                         tid,
-                        inv_headers,
+                        _with_fresh_idempotency_key(inv_headers),
                         service_label="Inventory Service",
                     )
                 raise HTTPException(status_code=409, detail="Carrinho com moedas diferentes não é suportado")
@@ -1445,7 +1458,7 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                 await _cancel_reserved_ticket(
                     client,
                     tid,
-                    inv_headers,
+                    _with_fresh_idempotency_key(inv_headers),
                     service_label="Inventory Service",
                 )
             raise HTTPException(status_code=400, detail="Erro ao criar checkout session")
@@ -1584,12 +1597,12 @@ async def process_refund(request: Request, req: RefundRequest, authorization: Op
 
         # 3. Cancelar bilhetes no Inventory
         #    Rota real: DELETE /api/v1/tickets/{ticket_id}
-        inv_headers = _inv_headers(authorization, idempotency_key=str(uuid.uuid4()), request=request)
+        inv_headers = _inv_headers(authorization, request=request)
         for tid in req.ticket_ids:
             await _cancel_reserved_ticket(
                 client,
                 tid,
-                inv_headers,
+                _with_fresh_idempotency_key(inv_headers),
                 service_label="Inventory Service",
             )
 
