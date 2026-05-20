@@ -91,6 +91,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 _API_CALL_LOG: collections.deque = collections.deque(maxlen=50)
 _API_CALL_TOTALS: collections.Counter = collections.Counter()
+_UPSTREAM_POD_TOTALS: collections.Counter = collections.Counter()
 
 
 def _api_call_path(url: str) -> str:
@@ -102,12 +103,22 @@ def _api_call_path(url: str) -> str:
         return str(url).split("?", 1)[0] or "unknown"
 
 
-def _record_api_call(method: str, url: str, status_code: int, latency_ms: float, service: str = ""):
+def _record_api_call(
+    method: str,
+    url: str,
+    status_code: int,
+    latency_ms: float,
+    service: str = "",
+    upstream_pod: str = "",
+):
     """Record a proxy API call for observability."""
     status_class = _status_bucket(status_code)
     service_name = service or "unknown"
     method_name = method.upper()
-    _API_CALL_TOTALS[(service_name, method_name, _api_call_path(url), status_class)] += 1
+    path = _api_call_path(url)
+    upstream_pod_name = upstream_pod or "unknown"
+    _API_CALL_TOTALS[(service_name, method_name, path, status_class)] += 1
+    _UPSTREAM_POD_TOTALS[(service_name, upstream_pod_name, method_name, path, status_class)] += 1
     _API_CALL_LOG.appendleft({
         "ts": datetime.now(tz=timezone.utc).isoformat(),
         "method": method_name,
@@ -115,6 +126,7 @@ def _record_api_call(method: str, url: str, status_code: int, latency_ms: float,
         "status": status_code,
         "latency_ms": round(latency_ms, 1),
         "service": service_name,
+        "upstream_pod": upstream_pod_name,
     })
 
 
@@ -155,7 +167,14 @@ async def proxy(
             _record_api_call(method, url, 503, round((time.perf_counter() - _t0) * 1000, 1), service_label)
             raise HTTPException(status_code=503, detail=f"{service_label} erro: {exc}")
 
-        _record_api_call(method, url, resp.status_code, round((time.perf_counter() - _t0) * 1000, 1), service_label)
+        _record_api_call(
+            method,
+            url,
+            resp.status_code,
+            round((time.perf_counter() - _t0) * 1000, 1),
+            service_label,
+            resp.headers.get("X-Pod-Name", ""),
+        )
 
         if resp.status_code >= 400:
             try:
@@ -231,6 +250,15 @@ async def _proxy_auth_with_response(
             raise HTTPException(status_code=504, detail="Auth Service timeout")
         except httpx.RequestError as exc:
             raise HTTPException(status_code=503, detail=f"Auth Service erro: {exc}")
+
+    _record_api_call(
+        method,
+        target_url,
+        upstream.status_code,
+        0,
+        "Auth Service",
+        upstream.headers.get("X-Pod-Name", ""),
+    )
 
     if upstream.status_code >= 400:
         try:
@@ -2086,6 +2114,23 @@ def _render_prometheus_metrics(snapshot: dict) -> str:
                 "status_class": status_class,
             },
         )
+    lines.extend([
+        "# HELP flashsale_composer_upstream_api_calls_total Composer proxied API calls grouped by downstream pod replica.",
+        "# TYPE flashsale_composer_upstream_api_calls_total counter",
+    ])
+    for (service_name, upstream_pod, method_name, path, status_class), count in sorted(_UPSTREAM_POD_TOTALS.items()):
+        _metric(
+            lines,
+            "flashsale_composer_upstream_api_calls_total",
+            count,
+            {
+                "service": service_name,
+                "upstream_pod": upstream_pod,
+                "method": method_name,
+                "path": path,
+                "status_class": status_class,
+            },
+        )
 
     return "\n".join(lines) + "\n"
 
@@ -2167,11 +2212,30 @@ if os.path.isdir(_FRONTEND_ASSETS):
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
-async def serve_frontend(full_path: str):
+async def serve_frontend(full_path: str, request: Request):
     """SPA fallback: devolve index.html para qualquer rota não-API."""
     # Deixa as rotas de API e docs serem tratadas pelos routers registados
     if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
         raise HTTPException(status_code=404, detail="Not found")
+    if full_path.startswith("templates/"):
+        suffix = full_path.removeprefix("templates/")
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"/auth/templates/{suffix}{query}", status_code=307)
+    if full_path.startswith("wallet/"):
+        suffix = full_path.removeprefix("wallet/")
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"/payment/wallet/{suffix}{query}", status_code=307)
+    if full_path.startswith("checkout/"):
+        suffix = full_path.removeprefix("checkout/")
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"/payment/checkout/{suffix}{query}", status_code=307)
     if os.path.isfile(_FRONTEND_INDEX):
-        return FileResponse(_FRONTEND_INDEX)
+        return FileResponse(
+            _FRONTEND_INDEX,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     raise HTTPException(status_code=404, detail="Frontend não encontrado")

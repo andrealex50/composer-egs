@@ -3,11 +3,12 @@ import axios from 'axios';
 import './App.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
-const AUTH_UI_BASE_URL = import.meta.env.VITE_AUTH_UI_BASE_URL || 'http://auth.flashsale';
+const PUBLIC_ORIGIN = typeof window !== 'undefined' ? window.location.origin : '';
+const AUTH_UI_BASE_URL = import.meta.env.VITE_AUTH_UI_BASE_URL || `${PUBLIC_ORIGIN}/auth`;
 const AUTH_UI_LOGIN_PATH = import.meta.env.VITE_AUTH_UI_LOGIN_PATH || '/templates/login.html';
 const AUTH_UI_REGISTER_PATH = import.meta.env.VITE_AUTH_UI_REGISTER_PATH || '/templates/register.html';
 const AUTH_UI_FORGOT_PATH = import.meta.env.VITE_AUTH_UI_FORGOT_PATH || '/templates/forgot_password.html';
-const PAYMENT_UI_BASE_URL = import.meta.env.VITE_PAYMENT_UI_BASE_URL || 'http://payment.flashsale';
+const PAYMENT_UI_BASE_URL = import.meta.env.VITE_PAYMENT_UI_BASE_URL || `${PUBLIC_ORIGIN}/payment`;
 const PAYMENT_UI_LOGIN_PATH = import.meta.env.VITE_PAYMENT_UI_LOGIN_PATH || '/wallet/login';
 const PAYMENT_UI_REGISTER_PATH = import.meta.env.VITE_PAYMENT_UI_REGISTER_PATH || '/wallet/register';
 const PAYMENT_UI_DASHBOARD_PATH = import.meta.env.VITE_PAYMENT_UI_DASHBOARD_PATH || '/wallet/dashboard';
@@ -19,18 +20,37 @@ const LEGACY_CART_STORAGE_KEY = 'flashsale_cart_v1';
 const LEGACY_WISHLIST_STORAGE_KEY = 'flashsale_wishlist_v1';
 const PENDING_CHECKOUT_STORAGE_KEY = 'flashsale_pending_checkout';
 
-const buildAuthUiUrl = (path, query = {}) => {
-  const url = new URL(path, AUTH_UI_BASE_URL);
+const buildPublicSubpathUrl = (baseUrl, path, query = {}) => {
+  const base = new URL(baseUrl || window.location.origin);
+  const rawPath = String(path || '').trim();
+  let url;
+
+  if (/^https?:\/\//i.test(rawPath)) {
+    url = new URL(rawPath);
+  } else {
+    const basePath = base.pathname.replace(/\/+$/, '');
+    const candidatePath = rawPath.replace(/^\/+/, '');
+    const rawAbsolutePath = rawPath.startsWith('/') ? rawPath : '';
+    const joinedPath = rawAbsolutePath && basePath && (rawAbsolutePath === basePath || rawAbsolutePath.startsWith(`${basePath}/`))
+      ? rawAbsolutePath
+      : `${basePath}/${candidatePath}`.replace(/\/{2,}/g, '/');
+    url = new URL(joinedPath || '/', base.origin);
+  }
+
   Object.entries(query).forEach(([key, value]) => { if (value) url.searchParams.set(key, value); });
   return url.toString();
 };
-const buildPaymentUiUrl = (path) => new URL(path, PAYMENT_UI_BASE_URL).toString();
+
+const buildAuthUiUrl = (path, query = {}) => {
+  return buildPublicSubpathUrl(AUTH_UI_BASE_URL, path, query);
+};
+const buildPaymentUiUrl = (path) => buildPublicSubpathUrl(PAYMENT_UI_BASE_URL, path);
 const resolvePaymentUiUrl = (rawUrl) => {
   const normalized = String(rawUrl || '').trim();
   if (!normalized) return '';
   try {
     // Relative URLs from backend should resolve against payment UI origin, not Composer.
-    return new URL(normalized, PAYMENT_UI_BASE_URL).toString();
+    return buildPublicSubpathUrl(PAYMENT_UI_BASE_URL, normalized);
   } catch (_) {
     return '';
   }

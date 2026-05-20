@@ -7,6 +7,8 @@ RUN npm ci
 COPY frontend/ ./
 # VITE_API_BASE_URL is empty so all /api/* calls are relative (same origin)
 ENV VITE_API_BASE_URL=
+ENV VITE_AUTH_UI_BASE_URL=
+ENV VITE_PAYMENT_UI_BASE_URL=
 RUN npm run build
 
 # ── Stage 2: Python API + static frontend ──────────────────────────────────
