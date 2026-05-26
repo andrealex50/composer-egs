@@ -180,6 +180,42 @@ const parseObjectStorage = (key) => {
   }
 };
 
+const parsePendingCheckout = () => {
+  const raw = localStorage.getItem(PENDING_CHECKOUT_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return {
+        mode: String(parsed.mode || '').trim(),
+        accountStorageKey: String(parsed.accountStorageKey || '').trim(),
+      };
+    }
+  } catch (_) {
+    // Older versions stored just "single" or "cart".
+  }
+  return { mode: String(raw || '').trim(), accountStorageKey: '' };
+};
+
+const savePendingCheckout = (mode, accountStorageKey = '') => {
+  localStorage.setItem(PENDING_CHECKOUT_STORAGE_KEY, JSON.stringify({
+    mode,
+    accountStorageKey: String(accountStorageKey || '').trim(),
+  }));
+};
+
+const clearStoredCartForAccount = (storageKey = '') => {
+  const normalizedStorageKey = String(storageKey || '').trim();
+  if (normalizedStorageKey) {
+    const byUser = parseObjectStorage(CART_STORAGE_BY_USER_KEY);
+    if (Object.prototype.hasOwnProperty.call(byUser, normalizedStorageKey)) {
+      delete byUser[normalizedStorageKey];
+      localStorage.setItem(CART_STORAGE_BY_USER_KEY, JSON.stringify(byUser));
+    }
+  }
+  localStorage.removeItem(LEGACY_CART_STORAGE_KEY);
+};
+
 const deriveAccountStorageKey = (user) => {
   const userId = String(user?.id || '').trim();
   if (userId) return `uid:${userId}`;
@@ -459,11 +495,12 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const status = params.get('status');
     if (!status) return;
-    const pendingCheckout = localStorage.getItem(PENDING_CHECKOUT_STORAGE_KEY);
+    const pendingCheckout = parsePendingCheckout();
     if (status === 'success') {
       setFlowInfo('');
       setToast({ type: 'success', text: 'Payment completed! Check your orders.' });
-      if (pendingCheckout === 'cart') {
+      if (pendingCheckout?.mode === 'cart') {
+        clearStoredCartForAccount(pendingCheckout.accountStorageKey || accountStorageKey);
         setCartByEvent({});
       }
       if (token) fetchPayments(token);
@@ -819,7 +856,7 @@ function App() {
       };
       const res = await axios.post(`${API_BASE_URL}/api/checkout`, payload, { headers: { Authorization: `Bearer ${token}` } });
       if (res.data?.checkout_url) {
-        localStorage.setItem(PENDING_CHECKOUT_STORAGE_KEY, 'single');
+        savePendingCheckout('single', accountStorageKey);
         window.location.href = res.data.checkout_url;
       } else {
         setToast({ type: 'warning', text: 'Checkout started, but no redirect URL was returned.' });
@@ -957,7 +994,7 @@ function App() {
       };
       const res = await axios.post(`${API_BASE_URL}/api/checkout/cart`, payload, { headers: { Authorization: `Bearer ${token}` } });
       if (res.data?.checkout_url) {
-        localStorage.setItem(PENDING_CHECKOUT_STORAGE_KEY, 'cart');
+        savePendingCheckout('cart', accountStorageKey);
         window.location.href = res.data.checkout_url;
       } else {
         setToast({ type: 'warning', text: 'Cart checkout started, but no redirect URL was returned.' });
