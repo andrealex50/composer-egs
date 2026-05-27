@@ -19,6 +19,7 @@ const WISHLIST_STORAGE_BY_USER_KEY = 'flashsale_wishlist_by_user_v1';
 const LEGACY_CART_STORAGE_KEY = 'flashsale_cart_v1';
 const LEGACY_WISHLIST_STORAGE_KEY = 'flashsale_wishlist_v1';
 const PENDING_CHECKOUT_STORAGE_KEY = 'flashsale_pending_checkout';
+const EVENT_IMAGE_ASSETS = ['/images/concert.png', '/images/festival.png', '/images/dj.png'];
 
 const buildPublicSubpathUrl = (baseUrl, path, query = {}) => {
   const base = new URL(baseUrl || window.location.origin);
@@ -226,12 +227,12 @@ const deriveAccountStorageKey = (user) => {
 
 // ─── Event banner gradient palette ─────────────────────────────────────────
 const BANNER_GRADIENTS = [
-  'linear-gradient(135deg, #0a2040 0%, #0d3b2a 100%)',
-  'linear-gradient(135deg, #1a0a30 0%, #0a1f40 100%)',
-  'linear-gradient(135deg, #0f2a1a 0%, #0a2030 100%)',
-  'linear-gradient(135deg, #200a0a 0%, #0a1530 100%)',
-  'linear-gradient(135deg, #101a30 0%, #0a2820 100%)',
-  'linear-gradient(135deg, #1a1000 0%, #0a2020 100%)',
+  'linear-gradient(135deg, #1a0530 0%, #2d1050 40%, #450a30 100%)',
+  'linear-gradient(135deg, #0f0828 0%, #1e1045 40%, #3a0a50 100%)',
+  'linear-gradient(135deg, #1a0a2e 0%, #2a0840 40%, #4a1030 100%)',
+  'linear-gradient(135deg, #0a0520 0%, #200a3a 40%, #350828 100%)',
+  'linear-gradient(135deg, #180828 0%, #280a45 40%, #3d0a38 100%)',
+  'linear-gradient(135deg, #120620 0%, #1c0a35 40%, #300a2a 100%)',
 ];
 
 const getBannerGradient = (seed) => {
@@ -1058,6 +1059,39 @@ function App() {
     return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
+  const parseDateParts = (value) => {
+    if (!value) return null;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return {
+      day: d.getDate(),
+      month: d.toLocaleDateString('pt-PT', { month: 'short' }).toUpperCase().replace('.', ''),
+    };
+  };
+
+  const getUrgencyTag = (ev) => {
+    const evDate = ev?.date ? new Date(ev.date) : null;
+    const now = new Date();
+    if (evDate && !Number.isNaN(evDate.getTime())) {
+      const daysUntil = (evDate - now) / (1000 * 60 * 60 * 24);
+      if (daysUntil <= 3 && daysUntil > 0) return { label: '⏰ Últimos', cls: 'urgency-last' };
+      if (daysUntil <= 7 && daysUntil > 0) return { label: '🔥 Hot', cls: 'urgency-hot' };
+    }
+    const created = ev?.created_at ? new Date(ev.created_at) : null;
+    if (created && !Number.isNaN(created.getTime())) {
+      const daysSinceCreated = (now - created) / (1000 * 60 * 60 * 24);
+      if (daysSinceCreated <= 5) return { label: '✨ Novo', cls: 'urgency-new' };
+    }
+    // fallback: use event index for variety
+    return null;
+  };
+
+  const getEventImage = (ev) => {
+    const seed = String(ev?.id || ev?.name || '');
+    const idx = seed ? seed.charCodeAt(0) % EVENT_IMAGE_ASSETS.length : 0;
+    return EVENT_IMAGE_ASSETS[idx];
+  };
+
   const copyEventUuid = async (eventId) => {
     const value = String(eventId || '').trim();
     if (!value) return;
@@ -1083,12 +1117,14 @@ function App() {
   const firstName = (user?.full_name || user?.email || '').split(/[\s@]/)[0] || 'there';
   const initials = firstName.slice(0, 2).toUpperCase();
   const visibleMainView = mainView === 'account' && !token ? 'events' : mainView;
+  const featuredEvent = events[0] || null;
+  const featuredEventImage = featuredEvent ? getEventImage(featuredEvent) : EVENT_IMAGE_ASSETS[1];
   const mainViewTabs = [
-    { id: 'events', label: 'Events', note: events.length > 0 ? `${events.length} live now` : 'Browse the lineup' },
-    { id: 'wishlist', label: 'Wishlist', note: wishlistCount > 0 ? 'Saved for later' : 'Keep favorites here', count: wishlistCount || null },
-    { id: 'cart', label: 'Cart', note: cartTicketCount > 0 ? cartTotalLabel : 'Review your picks', count: cartTicketCount || null },
-    ...(token ? [{ id: 'account', label: 'Account', note: walletExists ? 'Orders and wallet ready' : 'Profile and settings' }] : []),
-    ...(token && isPrivilegedUser ? [{ id: 'kpi', label: '📊 KPIs', note: 'System observability' }] : []),
+    { id: 'events', label: 'Eventos', note: events.length > 0 ? `${events.length} em cartaz` : 'Descobre o que ha' },
+    { id: 'wishlist', label: 'Favoritos', note: wishlistCount > 0 ? 'Guardados' : 'Para mais tarde', count: wishlistCount || null },
+    { id: 'cart', label: 'Carrinho', note: cartTicketCount > 0 ? cartTotalLabel : 'O teu passe', count: cartTicketCount || null },
+    ...(token ? [{ id: 'account', label: 'Conta', note: walletExists ? 'Encomendas e carteira' : 'Perfil e definicoes' }] : []),
+    ...(token && isPrivilegedUser ? [{ id: 'kpi', label: 'KPIs', note: 'Observabilidade' }] : []),
   ];
   const managerEventChoices = events
     .filter((ev) => ev?.id)
@@ -1099,7 +1135,8 @@ function App() {
       {/* ── NAV ─────────────────────────────────── */}
       <nav className="nav">
         <div className="nav-logo">
-          ⚡ FlashSale
+          <span className="nav-logo-mark">FS</span>
+          <span>FlashSale</span>
         </div>
         <div className="nav-right">
           <button
@@ -1108,7 +1145,7 @@ function App() {
             type="button"
           >
             <IconHeart />
-            Wishlist
+            Favoritos
             {wishlistCount > 0 && <span className="nav-cart-count">{wishlistCount}</span>}
           </button>
           <button
@@ -1117,7 +1154,7 @@ function App() {
             type="button"
           >
             <IconCart />
-            Cart
+            Carrinho
             {cartTicketCount > 0 && <span className="nav-cart-count">{cartTicketCount}</span>}
           </button>
           {authError && <span className="error-msg" style={{ fontSize: '0.82rem', maxWidth: 260 }}>{authError}</span>}
@@ -1125,17 +1162,17 @@ function App() {
             <>
               <div className="nav-user">
                 <div className="nav-avatar">{initials}</div>
-                <span>Hello, <strong>{firstName}</strong></span>
+                <span>Olá, <strong>{firstName}</strong></span>
               </div>
-              <button className="btn btn-ghost btn-sm" onClick={handleLogout}>Sign out</button>
+              <button className="btn btn-ghost btn-sm" onClick={handleLogout}>Sair</button>
             </>
           ) : (
             <>
               <button className="btn btn-ghost btn-sm" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
-                Sign in
+                Entrar
               </button>
               <button className="btn btn-primary btn-sm" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
-                Get started
+                Criar conta
               </button>
             </>
           )}
@@ -1149,40 +1186,51 @@ function App() {
         {flowInfo && <div className="flow-info" style={{ marginTop: '1rem' }}>{flowInfo}</div>}
 
         {/* ── HERO ────────────────────────────── */}
-        <section className="hero">
-          <div className="hero-glow hero-glow-a" />
-          <div className="hero-glow hero-glow-b" />
+        <section className="hero event-hero">
           <div className="hero-content">
             <div className="hero-eyebrow">
               <span />
-              🎶 Concerts · Festivals · Sports · Theatre
+              Bilhetes ao vivo em minutos
             </div>
             <h1>
               {token ? (
-                <>Welcome back,<br /><em>{firstName}.</em></>
+                <>Escolhe<br />a tua próxima<br /><em>noite.</em></>
               ) : (
-                <>Find events<br />you'll <em>love.</em></>
+                <>Compra<br />o momento,<br />não só o <em>bilhete.</em></>
               )}
             </h1>
             <p className="hero-sub">
               {token
-                ? 'Your tickets and orders are all here. Browse what\'s coming up!'
-                : 'Browse, buy tickets, and go — it\'s that simple.'}
+                ? `Bem-vindo, ${firstName}. Explora eventos, guarda favoritos e entra direto no checkout.`
+                : 'Concertos, festivais, teatro, desporto e noites de club num só palco visual.'}
             </p>
             {!token && (
               <div className="hero-cta">
                 <button className="btn btn-primary" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
-                  Get started — it's free
+                  Começar agora
                 </button>
                 <button className="btn btn-ghost" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
-                  Sign in
+                  Entrar
                 </button>
               </div>
             )}
+            <div className="hero-stats">
+              <div className="hero-stat"><strong>{events.length}</strong><span>eventos</span></div>
+              <div className="hero-stat"><strong>{cartTicketCount}</strong><span>bilhetes no carrinho</span></div>
+              <div className="hero-stat"><strong>{wishlistCount}</strong><span>favoritos</span></div>
+            </div>
+          </div>
+          <div className="hero-art" style={{ backgroundImage: `url(${featuredEventImage})` }}>
+            <div className="hero-art-shade" />
+            <div className="hero-ticket-preview">
+              <span className="ticket-preview-label">Em destaque</span>
+              <strong>{featuredEvent?.name || 'FlashSale Live'}</strong>
+              <small>{featuredEvent ? formatDate(featuredEvent.date) : 'Lisboa · Hoje à noite'}</small>
+            </div>
           </div>
         </section>
 
-        <section className="workspace-shell reveal">
+        <section className="workspace-shell reveal floating-switcher">
           <div className="workspace-nav" role="tablist" aria-label="Main sections">
             {mainViewTabs.map((tab) => (
               <button
@@ -1207,12 +1255,12 @@ function App() {
 
         {/* ── EVENTS ──────────────────────────── */}
         <section className="events-section view-panel" id="events" style={{ display: visibleMainView === 'events' ? 'block' : 'none' }}>
-          <div className="section-header">
+          <div className="section-header editorial-header">
             <div>
-              <h2>What's On 🔥</h2>
-              <p>{events.length > 0 ? `${events.length} events to explore` : 'Check out what\'s coming up'}</p>
+              <h2>Em Cartaz</h2>
+              <p>{events.length > 0 ? `${events.length} evento(s) publicados pelo Inventory.` : 'Vê o que vem a seguir.'}</p>
             </div>
-            <button className="btn btn-ghost btn-sm" onClick={fetchEvents}>↻ Refresh</button>
+            <button className="btn btn-ghost btn-sm" onClick={fetchEvents}>Atualizar</button>
           </div>
 
           {loadingEvents ? (
@@ -1224,23 +1272,31 @@ function App() {
               {eventsError && <p className="error-msg">{eventsError}</p>}
               {events.length === 0 && !eventsError && (
                 <div className="empty-state empty-state-card">
-                  <div className="empty-state-emoji">🎪</div>
-                  <p className="empty-state-title">No events yet</p>
-                  <p>Something epic is coming soon — stay tuned!</p>
+                  <p className="empty-state-title">Sem eventos publicados</p>
+                  <p>Quando o Inventory publicar eventos, eles aparecem aqui.</p>
                 </div>
               )}
-              {events.slice(0, 9).map((ev) => {
+              {events.slice(0, 12).map((ev, evIdx) => {
                 const qty = quantityByEvent[ev.id] || 1;
                 const buyingThis = checkoutLoadingEventId === ev.id;
                 const eventStatus = String(ev.status || '').toLowerCase();
                 const isBuyableEvent = eventStatus === 'published';
                 const inWishlist = Boolean(wishlistByEvent[ev.id]);
+                const dateParts = parseDateParts(ev.date);
+                const urgency = getUrgencyTag(ev) || (evIdx < 2 ? { label: '🔥 Hot', cls: 'urgency-hot' } : null);
                 return (
                   <article key={ev.id} className="event-card">
                     <div className="event-card-banner">
-                      <div className="event-card-banner-bg" style={{ background: getBannerGradient(ev.id || ev.name) }} />
+                      <div className="event-card-banner-bg" style={{ backgroundImage: `url(${getEventImage(ev)})` }} />
                       <div className="event-card-banner-overlay" />
-                      <div className="event-card-status">
+                      {dateParts && (
+                        <div className="event-date-badge">
+                          <span className="event-date-badge-month">{dateParts.month}</span>
+                          <span className="event-date-badge-day">{dateParts.day}</span>
+                        </div>
+                      )}
+                      <div className="event-card-status" style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                        {urgency && <span className={`urgency-tag ${urgency.cls}`}>{urgency.label}</span>}
                         <span className={statusClass(ev.status)}>{ev.status || 'draft'}</span>
                       </div>
                     </div>
@@ -1253,7 +1309,7 @@ function App() {
                           onClick={() => toggleWishlist(ev)}
                           type="button"
                           disabled={!token}
-                          title={inWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
+                          title={inWishlist ? 'Remover da wishlist' : 'Adicionar à wishlist'}
                         >
                           <IconHeart filled={inWishlist} />
                         </button>
@@ -1288,7 +1344,7 @@ function App() {
 
                       <div className="event-card-footer">
                         <div className="event-price">
-                          <span className="event-price-label">From</span>
+                          <span className="event-price-label">A partir de</span>
                           <span className="event-price-value">{ev.min_price ? `€${Number(ev.min_price).toFixed(2)}` : 'TBD'}</span>
                         </div>
 
@@ -1302,17 +1358,17 @@ function App() {
                             className="btn btn-ghost btn-sm"
                             onClick={() => addToCart(ev)}
                             disabled={!token || !isBuyableEvent}
-                            title={!token ? 'Sign in to add to cart' : (!isBuyableEvent ? `Event status: ${eventStatus || 'unknown'} (not purchasable)` : 'Add selected quantity to cart')}
+                            title={!token ? 'Entra para adicionar ao carrinho' : (!isBuyableEvent ? `Estado: ${eventStatus || 'unknown'}` : 'Adicionar ao carrinho')}
                           >
-                            Add
+                            Adicionar
                           </button>
                           <button
                             className="btn btn-primary btn-sm"
                             onClick={() => handleCheckout(ev.id)}
                             disabled={!token || buyingThis || !isBuyableEvent}
-                            title={!token ? 'Sign in to buy' : (!isBuyableEvent ? `Event status: ${eventStatus || 'unknown'} (not purchasable)` : undefined)}
+                            title={!token ? 'Entra para comprar' : (!isBuyableEvent ? `Estado: ${eventStatus || 'unknown'}` : undefined)}
                           >
-                            {buyingThis ? '…' : token ? 'Buy' : '🔒'}
+                            {buyingThis ? '…' : token ? 'Comprar' : '🔒'}
                           </button>
                         </div>
                       </div>
@@ -1330,16 +1386,15 @@ function App() {
         <section className="wishlist-section view-panel" id="wishlist" style={{ display: visibleMainView === 'wishlist' ? 'block' : 'none' }}>
           <div className="section-header">
             <div>
-              <h2>Your Wishlist ♡</h2>
-              <p>{wishlistCount > 0 ? `${wishlistCount} saved event(s)` : 'Save events and come back later'}</p>
+              <h2>Favoritos</h2>
+              <p>{wishlistCount > 0 ? `${wishlistCount} evento(s) guardado(s)` : 'Guarda eventos e volta mais tarde'}</p>
             </div>
           </div>
 
           {wishlistItems.length === 0 ? (
             <div className="empty-state empty-state-card">
-              <div className="empty-state-emoji">💫</div>
-              <p className="empty-state-title">No wishlist items yet</p>
-              <p>Tap the heart on an event card to save it.</p>
+              <p className="empty-state-title">Ainda sem favoritos</p>
+              <p>Carrega no coração de um evento para o guardar.</p>
             </div>
           ) : (
             <div className="wishlist-list">
@@ -1363,9 +1418,9 @@ function App() {
                         disabled={!canMoveToCart}
                         title={!canMoveToCart ? `Event status: ${itemStatus || 'unknown'} (not purchasable)` : 'Move to cart'}
                       >
-                        Move to Cart
+                        Mover para carrinho
                       </button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => removeWishlistItem(item.event_id)}>Remove</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => removeWishlistItem(item.event_id)}>Remover</button>
                     </div>
                   </div>
                 );
@@ -1376,30 +1431,31 @@ function App() {
 
         {/* ── CART ───────────────────────────── */}
         <section className="cart-section view-panel" id="cart" style={{ display: visibleMainView === 'cart' ? 'block' : 'none' }}>
-          <div className="section-header">
+          <div className="section-header editorial-header">
             <div>
-              <br></br>
-              <h2>Your Cart 🛒</h2>
-              <p>{cartTicketCount > 0 ? `${cartTicketCount} ticket(s) selected` : 'Add events to start your checkout'}</p>
+              <h2>O teu passe</h2>
+              <p>{cartTicketCount > 0 ? `${cartTicketCount} bilhete(s) selecionado(s)` : 'Adiciona eventos para começar o checkout'}</p>
             </div>
           </div>
 
           {cartItems.length === 0 ? (
             <div className="empty-state empty-state-card">
-              <div className="empty-state-emoji">🧺</div>
-              <p className="empty-state-title">Your cart is empty</p>
-              <p>Pick an event and click Add to Cart to build your order.</p>
+              <p className="empty-state-title">Carrinho vazio</p>
+              <p>Escolhe um evento e adiciona bilhetes ao teu passe.</p>
             </div>
           ) : (
-            <div className="cart-card">
+            <div className="ticket-cart-layout">
               <div className="cart-list">
                 {cartItems.map((item) => {
                   const lineTotal = Number(item.quantity || 0) * Number(item.amount_cents_per_ticket || 0);
+                  const relatedEvent = events.find((ev) => ev.id === item.event_id);
+                  const image = relatedEvent ? getEventImage(relatedEvent) : EVENT_IMAGE_ASSETS[0];
                   return (
-                    <div className="cart-item" key={item.event_id}>
+                    <div className="cart-item ticket-line" key={item.event_id}>
+                      <div className="ticket-line-image" style={{ backgroundImage: `url(${image})` }} />
                       <div className="cart-item-main">
                         <div className="cart-item-title">{item.name || 'Unnamed event'}</div>
-                        <div className="cart-item-meta">Event ID: {item.event_id?.slice(0, 8)}…</div>
+                        <div className="cart-item-meta">Codigo: {item.event_id?.slice(0, 8)}...</div>
                       </div>
                       <div className="cart-item-actions">
                         <div className="qty-stepper">
@@ -1408,19 +1464,24 @@ function App() {
                           <button onClick={() => setCartItemQuantity(item.event_id, Number(item.quantity || 1) + 1)}>+</button>
                         </div>
                         <div className="cart-item-price">€{(lineTotal / 100).toFixed(2)}</div>
-                        <button className="btn btn-ghost btn-sm" onClick={() => removeCartItem(item.event_id)}>Remove</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => removeCartItem(item.event_id)}>Remover</button>
                       </div>
                     </div>
                   );
                 })}
               </div>
-              <div className="cart-footer">
-                <div className="cart-total">
-                  <span>Total</span>
+              <div className="cart-card ticket-stub">
+                <div className="ticket-stub-top">
+                  <span>FlashSale Pass</span>
                   <strong>{cartTotalLabel}</strong>
                 </div>
+                <div className="ticket-stub-cut" />
+                <div className="ticket-stub-meta">
+                  <span>{cartItems.length} evento(s)</span>
+                  <span>{cartTicketCount} bilhete(s)</span>
+                </div>
                 <button className="btn btn-primary" onClick={handleCartCheckout} disabled={cartCheckoutLoading || !token}>
-                  {cartCheckoutLoading ? 'Redirecting…' : (token ? 'Proceed to Payment' : 'Sign in to checkout')}
+                  {cartCheckoutLoading ? 'A redirecionar...' : (token ? 'Pagar agora' : 'Entrar para pagar')}
                 </button>
               </div>
             </div>
@@ -2067,19 +2128,19 @@ function App() {
         {!token && (
           <section style={{ marginBottom: '3rem' }}>
             <div className="signin-gate">
-              <div className="signin-gate-emoji">🎉</div>
+              <div className="signin-gate-emoji">🎶</div>
               <div>
                 <p className="signin-gate-title">
-                  Don't miss out!
+                  Não percas nada!
                 </p>
-                <p>Join thousands of fans — create your free account and never miss an event.</p>
+                <p>Junta-te a milhares de fãs — cria a tua conta grátis e nunca percas um evento.</p>
               </div>
               <div className="signin-gate-btns">
                 <button className="btn btn-primary btn-lg" onClick={() => startAuthUiFlow(AUTH_UI_REGISTER_PATH)} disabled={authRedirectLoading}>
-                  Join FlashSale — it's free
+                  Junta-te ao FlashSale — é grátis
                 </button>
                 <button className="btn btn-ghost" onClick={() => startAuthUiFlow(AUTH_UI_LOGIN_PATH)} disabled={authRedirectLoading}>
-                  Already have an account? Sign in
+                  Já tens conta? Entrar
                 </button>
               </div>
             </div>
