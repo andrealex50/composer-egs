@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Any, Optional, List
 
 # ---------------------------------------------------------------------------
 # Configuration via environment variables
@@ -498,6 +498,7 @@ class CheckoutRequest(BaseModel):
     event_id: str
     quantity: int = 1
     ticket_category_id: Optional[str] = None
+    category: Optional[str] = None
     success_url: str
     cancel_url: str
     amount_cents: int
@@ -513,6 +514,7 @@ class CartCheckoutItemRequest(BaseModel):
     event_id: str
     quantity: int = 1
     ticket_category_id: Optional[str] = None
+    category: Optional[str] = None
 
 
 class CartCheckoutRequest(BaseModel):
@@ -531,6 +533,90 @@ class BrowserHandoffRequest(BaseModel):
 class BrowserHandoffExchangeRequest(BaseModel):
     code: str
     state: str
+
+
+def _clean_optional_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _requested_ticket_category_from_mapping(data: dict) -> Optional[str]:
+    """Accept legacy ticket_category_id while preferring Inventory's category field."""
+    return _clean_optional_string(data.get("category")) or _clean_optional_string(data.get("ticket_category_id"))
+
+
+def _requested_ticket_category_from_model(data: BaseModel) -> Optional[str]:
+    return _clean_optional_string(getattr(data, "category", None)) or _clean_optional_string(
+        getattr(data, "ticket_category_id", None)
+    )
+
+
+def _ticket_matches_requested_category(ticket: dict, requested_category: Optional[str]) -> bool:
+    if not requested_category:
+        return True
+    category = _clean_optional_string(ticket.get("category"))
+    legacy_category = _clean_optional_string(ticket.get("ticket_category_id"))
+    return requested_category in {category, legacy_category}
+
+
+def _normalize_ticket_batch_payload_for_inventory(body: dict) -> dict:
+    """Map legacy ticket_category_id into Inventory's category field before proxying."""
+    normalized = dict(body)
+    if not _clean_optional_string(normalized.get("category")):
+        legacy_category = _clean_optional_string(normalized.get("ticket_category_id"))
+        if legacy_category:
+            normalized["category"] = legacy_category
+    normalized.pop("ticket_category_id", None)
+    return normalized
+
+
+def _parse_ticket_price(value: Any) -> Optional[Decimal]:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _build_ticket_category_summaries(tickets: list[dict]) -> list[dict]:
+    summaries: dict[str, dict] = {}
+    for ticket in tickets:
+        category = _clean_optional_string(ticket.get("category")) or _clean_optional_string(
+            ticket.get("ticket_category_id")
+        ) or "General"
+        status_name = (_clean_optional_string(ticket.get("status")) or "unknown").lower()
+        price = _parse_ticket_price(ticket.get("price"))
+        currency = _clean_optional_string(ticket.get("currency")) or "EUR"
+
+        summary = summaries.setdefault(
+            category,
+            {
+                "category": category,
+                "currency": currency,
+                "min_price": None,
+                "total_count": 0,
+                "available_count": 0,
+                "reserved_count": 0,
+                "sold_count": 0,
+                "used_count": 0,
+            },
+        )
+        summary["total_count"] += 1
+        if status_name in {"available", "reserved", "sold", "used"}:
+            summary[f"{status_name}_count"] += 1
+        if price is not None and (summary["min_price"] is None or price < summary["min_price"]):
+            summary["min_price"] = price
+            summary["currency"] = currency
+
+    result = []
+    for summary in summaries.values():
+        min_price = summary["min_price"]
+        result.append({
+            **summary,
+            "min_price": str(min_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if min_price is not None else None,
+        })
+    return sorted(result, key=lambda item: item["category"].lower())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -761,20 +847,37 @@ async def create_event(request: Request, authorization: Optional[str] = Header(N
 
 @app.get("/api/events/{event_id}", summary="Detalhes do evento", tags=["Events"])
 async def get_event(event_id: str, request: Request):
-    # Composer bonus: junta as categorias de bilhetes ao evento
+    # Composer bonus: junta bilhetes e um resumo real por categoria ao evento.
     event_data = await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}",
                               headers=_inv_headers(request=request),
                               service_label="Inventory Service",
                               request=request)
 
     try:
-        tickets = await proxy("GET", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}/tickets",
-                               headers=_inv_headers(request=request),
-                               service_label="Inventory Service",
-                               request=request)
-        if isinstance(tickets, dict):
-            event_data["ticket_categories"] = tickets.get("data", [])
-    except HTTPException:
+        all_tickets: list[dict] = []
+        skip = 0
+        limit = 100
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            while True:
+                resp = await client.get(
+                    f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}/tickets",
+                    headers=_inv_headers(request=request),
+                    params={"skip": skip, "limit": limit},
+                )
+                if resp.status_code != 200:
+                    break
+                payload = resp.json()
+                batch = payload.get("data", []) if isinstance(payload, dict) else []
+                all_tickets.extend(batch)
+                total = int(payload.get("total") or len(all_tickets)) if isinstance(payload, dict) else len(all_tickets)
+                if len(all_tickets) >= total or not batch:
+                    break
+                skip += len(batch)
+
+        event_data["tickets"] = all_tickets
+        event_data["tickets_total"] = len(all_tickets)
+        event_data["ticket_categories"] = _build_ticket_category_summaries(all_tickets)
+    except Exception:
         pass
 
     return event_data
@@ -806,7 +909,7 @@ async def delete_event(event_id: str, request: Request, authorization: Optional[
 
 @app.post("/api/events/{event_id}/tickets", summary="Criar bilhetes (batch)", tags=["Tickets"])
 async def create_tickets(event_id: str, request: Request, authorization: Optional[str] = Header(None)):
-    body = await request.json()
+    body = _normalize_ticket_batch_payload_for_inventory(await request.json())
     claims = await _ensure_event_admin_if_required(authorization, request)
     return await proxy("POST", f"{INVENTORY_SERVICE_URL}/api/v1/events/{event_id}/tickets",
                         headers=_inv_headers(authorization, auth_claims=claims, idempotency_key=str(uuid.uuid4()), request=request),
@@ -882,8 +985,7 @@ async def use_ticket(ticket_id: str, request: Request, authorization: Optional[s
     )
 
 
-@app.delete("/api/tickets/{ticket_id}", summary="Cancelar bilhete reservado", tags=["Tickets"])
-async def cancel_ticket(ticket_id: str, request: Request, authorization: Optional[str] = Header(None)):
+async def _cancel_ticket_via_inventory(ticket_id: str, request: Request, authorization: Optional[str]):
     """Cancela reserva de bilhete; operação protegida por role quando política está ativa."""
     claims = await _ensure_event_admin_if_required(authorization, request)
     return await proxy(
@@ -893,6 +995,18 @@ async def cancel_ticket(ticket_id: str, request: Request, authorization: Optiona
         service_label="Inventory Service",
         request=request,
     )
+
+
+@app.delete("/api/tickets/{ticket_id}", summary="Cancelar bilhete reservado", tags=["Tickets"])
+async def cancel_ticket(ticket_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    """Cancela reserva de bilhete; operação protegida por role quando política está ativa."""
+    return await _cancel_ticket_via_inventory(ticket_id, request, authorization)
+
+
+@app.post("/api/tickets/{ticket_id}/cancel", summary="Cancelar bilhete reservado (alias frontend)", tags=["Tickets"])
+async def cancel_ticket_alias(ticket_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    """Alias compatível com o frontend; mantém DELETE /api/tickets/{ticket_id} como rota principal."""
+    return await _cancel_ticket_via_inventory(ticket_id, request, authorization)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -939,9 +1053,9 @@ async def create_reservation(request: Request, authorization: Optional[str] = He
         
         available = res.json().get("data", [])
         
-        if body.get("ticket_category_id"):
-            cat_id = body["ticket_category_id"]
-            available = [t for t in available if t.get("ticket_category_id") == cat_id]
+        requested_category = _requested_ticket_category_from_mapping(body)
+        if requested_category:
+            available = [t for t in available if _ticket_matches_requested_category(t, requested_category)]
             
         if len(available) < quantity:
             raise HTTPException(status_code=409, detail="Não existem bilhetes suficientes")
@@ -1200,8 +1314,9 @@ async def checkout(request: Request, order: CheckoutRequest, authorization: Opti
             raise HTTPException(status_code=500, detail="Erro Inventory")
             
         available = res.json().get("data", [])
-        if order.ticket_category_id:
-            available = [t for t in available if t.get("ticket_category_id") == order.ticket_category_id]
+        requested_category = _requested_ticket_category_from_model(order)
+        if requested_category:
+            available = [t for t in available if _ticket_matches_requested_category(t, requested_category)]
             
         if len(available) < order.quantity:
             raise HTTPException(status_code=409, detail="Esgotado ou indisponível.")
@@ -1374,12 +1489,9 @@ async def checkout_cart(request: Request, order: CartCheckoutRequest, authorizat
                 raise HTTPException(status_code=500, detail="Erro Inventory")
 
             available = res.json().get("data", [])
-            if item.ticket_category_id:
-                available = [
-                    t for t in available
-                    if t.get("ticket_category_id") == item.ticket_category_id
-                    or t.get("category") == item.ticket_category_id
-                ]
+            requested_category = _requested_ticket_category_from_model(item)
+            if requested_category:
+                available = [t for t in available if _ticket_matches_requested_category(t, requested_category)]
 
             if len(available) < item.quantity:
                 for tid in reserved_ticket_ids:
