@@ -1,0 +1,35 @@
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant C as Composer
+  participant A as Auth Service
+  participant I as Inventory Service
+  participant P as Payment Service
+
+  B->>C: POST /api/checkout/cart with items[] and Authorization Bearer
+  C->>A: GET /api/v1/auth/me
+  A-->>C: user profile
+
+  loop each cart item
+    C->>I: GET /api/v1/events/{event_id} with X-API-Key
+    I-->>C: event
+    C->>I: GET /api/v1/events/{event_id}/tickets?status=available
+    I-->>C: candidate tickets
+    loop item quantity
+      C->>I: PUT /api/v1/tickets/{ticket_id}/reserve with Idempotency-Key
+      I-->>C: reserved ticket
+    end
+  end
+
+  C->>C: verify at least one line item and a single currency
+  C->>P: POST /api/v1/checkout with one combined checkout session
+  P-->>C: checkout_url and session metadata with all ticket_ids
+  C-->>B: checkout_url and ticket_count
+
+  alt any event lookup, reservation, currency check, or payment session creation fails
+    loop all already reserved tickets
+      C->>I: DELETE /api/v1/tickets/{ticket_id}
+      I-->>C: available again
+    end
+    C-->>B: failure response
+  end

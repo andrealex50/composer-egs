@@ -1,0 +1,22 @@
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant C as Composer
+  participant A as Auth Service
+  participant P as Payment Service
+  participant I as Inventory Service
+
+  B->>C: POST /api/refund with payment_id and ticket_ids, Authorization Bearer
+  C->>A: POST /api/v1/auth/verify with X-Service-Auth
+  A-->>C: valid user claims
+  C->>P: DELETE /api/v1/payments/{payment_id} with X-API-Key and Idempotency-Key
+  P->>P: pending payment -> canceled, succeeded payment -> refunded
+  P-->>C: PaymentResponse
+  loop each ticket_id supplied by caller
+    C->>I: DELETE /api/v1/tickets/{ticket_id} with X-API-Key and Idempotency-Key
+    I->>I: reserved ticket -> available
+    I-->>C: 200 TicketResponse or conflict if not reserved
+  end
+  C-->>B: refund/cancel result
+
+  Note over C,I: Inventory DELETE is a reservation release endpoint, not a hard delete.<br/>It only succeeds for RESERVED tickets.

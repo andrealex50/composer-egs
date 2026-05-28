@@ -1,0 +1,32 @@
+flowchart TB
+  subgraph docker["Docker Compose public routing through Traefik host rules"]
+    dHost["Hostnames on port 80"]
+    dHost -->|"composer.flashsale"| dComposer["composer:8000"]
+    dHost -->|"auth.flashsale"| dAuth["auth-service:8000"]
+    dHost -->|"auth.flashsale/templates<br/>auth.flashsale/static"| dAuthFrontend["auth-frontend:80"]
+    dHost -->|"payment-auth.flashsale"| dPaymentAuth["payment-auth-service:8000"]
+    dHost -->|"inventory.flashsale"| dInventory["inventory-service:8000"]
+    dHost -->|"payment.flashsale"| dPayment["payment-service:8000"]
+    dHost -->|"traefik.flashsale"| dTraefik["Traefik dashboard"]
+    dHost -->|"grafana.flashsale"| dGrafana["grafana:3000"]
+    dHost -->|"vault.flashsale"| dVault["vault:8200"]
+    dHost -->|"jaeger.flashsale"| dJaeger["jaeger:16686"]
+  end
+
+  subgraph k8s["Kubernetes public routing through Ingress"]
+    kHost["grupo2-egs.deti.ua.pt"]
+    kHost -->|"/"| kComposer["composer:8000"]
+    kHost -->|"/auth/templates<br/>/auth/static"| kAuthFrontend["auth-frontend:80"]
+    kHost -->|"/auth"| kAuth["auth-service:8000"]
+    kHost -->|"/payment-auth"| kPaymentAuth["payment-auth-service:8000"]
+    kHost -->|"/inventory"| kInventory["inventory-service:8000"]
+    kHost -->|"/payment"| kPayment["payment-service:8000"]
+    kHost -->|"/grafana"| kGrafana["grafana:3000"]
+    kHost -->|"/prometheus"| kPrometheus["prometheus:9090"]
+    kHost -->|"/jaeger"| kJaeger["jaeger:16686"]
+    kHost -->|"/mail"| kMail["mailhog:8025"]
+  end
+
+  note1["Observed mismatch:<br/>Docker exposes vault.flashsale but no Prometheus/MailHog route.<br/>Kubernetes exposes /prometheus and /mail but no /vault path."]
+  dHost -.-> note1
+  kHost -.-> note1

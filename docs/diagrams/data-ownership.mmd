@@ -1,0 +1,29 @@
+flowchart LR
+  composer["Composer<br/>orchestration only"]
+  auth["Auth Service"]
+  inventory["Inventory Service"]
+  payment["Payment Service"]
+
+  authDb[("Auth DB<br/>users, password hashes, roles")]
+  authRedis[("Auth Redis<br/>JWT denylist")]
+  invDb[("Inventory DB<br/>events, tickets, KPI events")]
+  invRedis[("Inventory Redis<br/>rate limits, idempotency")]
+  payDb[("Payment DB<br/>customers, payments, checkout_sessions, receipts, api_keys")]
+  payRedis[("Payment Redis<br/>rate limits, idempotency")]
+  handoff[("Composer memory<br/>browser handoff one-time codes")]
+
+  composer -->|"temporary only"| handoff
+  composer -->|"reads/commands through APIs"| auth
+  composer -->|"reads/commands through APIs"| inventory
+  composer -->|"reads/commands through APIs"| payment
+
+  auth --> authDb
+  auth --> authRedis
+  inventory --> invDb
+  inventory --> invRedis
+  payment --> payDb
+  payment --> payRedis
+
+  auth -.->|"does not own events or payments"| inventory
+  inventory -.->|"does not own customers or receipts"| payment
+  payment -.->|"does not own users or roles"| auth

@@ -1,0 +1,35 @@
+flowchart LR
+  browser["Browser / React frontend"]
+  composer["Composer FastAPI<br/>public /api/*"]
+  auth["Auth Service<br/>/api/v1/auth/*"]
+  inventory["Inventory Service<br/>/api/v1/events, /api/v1/tickets"]
+  payment["Payment Service<br/>/api/v1/checkout, /api/v1/payments, /api/v1/customers"]
+
+  browser -->|"POST /api/auth/register -> POST /api/v1/auth/register"| composer
+  composer -->|"proxy body, cookies where relevant"| auth
+  browser -->|"POST /api/auth/login, refresh, logout<br/>GET /api/auth/me<br/>forgot/reset/delete"| composer
+  composer -->|"preserve Authorization, Cookie, Origin, Referer<br/>preserve Set-Cookie response"| auth
+  browser -->|"POST /api/auth/browser/handoff<br/>POST /api/auth/browser/exchange"| composer
+  composer -->|"POST /api/v1/auth/verify<br/>X-Service-Auth"| auth
+
+  browser -->|"GET/POST/PUT/DELETE /api/events<br/>/api/events/{id}/tickets<br/>/api/tickets/{id} lifecycle<br/>POST /api/tickets/{id}/cancel alias"| composer
+  composer -->|"maps to /api/v1/events and /api/v1/tickets<br/>X-API-Key, Authorization, Idempotency-Key, X-User-*"| inventory
+
+  browser -->|"POST /api/reservations<br/>GET /api/reservations/{ticket_id}"| composer
+  composer -->|"GET event, list available tickets, PUT reserve<br/>DELETE reserved tickets on compensation"| inventory
+
+  browser -->|"GET/POST /api/payment-account<br/>GET/POST /api/payments<br/>GET /api/payments/{id}"| composer
+  composer -->|"GET/POST /api/v1/customers<br/>GET/POST /api/v1/payments<br/>X-API-Key"| payment
+  browser -->|"POST /api/payments/{id}/confirm"| composer
+  composer -->|"PUT /api/v1/payments/{id}/confirm<br/>method translation"| payment
+  browser -->|"POST /api/payments/{id}/cancel"| composer
+  composer -->|"DELETE /api/v1/payments/{id}<br/>method translation"| payment
+  browser -->|"GET /api/payments/{id}/receipt"| composer
+  composer -->|"GET /api/v1/payments/{id}/receipt<br/>PDF bytes"| payment
+
+  browser -->|"POST /api/checkout<br/>POST /api/checkout/cart"| composer
+  composer -->|"reserve tickets before payment"| inventory
+  composer -->|"POST /api/v1/checkout<br/>checkout session"| payment
+  browser -->|"GET /api/checkout/success<br/>GET /api/checkout/cancel<br/>POST /api/refund"| composer
+  composer -->|"sell or release tickets"| inventory
+  composer -->|"GET checkout / DELETE payment"| payment

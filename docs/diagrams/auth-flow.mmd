@@ -1,0 +1,45 @@
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant C as Composer
+  participant A as Auth Service
+  participant DB as Auth PostgreSQL
+  participant R as Auth Redis denylist
+  participant S as Downstream service
+
+  B->>C: POST /api/auth/register
+  C->>A: POST /api/v1/auth/register
+  A->>DB: insert users row
+  A-->>C: 201 UserResponse
+  C-->>B: 201 UserResponse
+
+  B->>C: POST /api/auth/login
+  C->>A: POST /api/v1/auth/login
+  A->>DB: verify email/password and active status
+  A-->>C: TokenResponse + Set-Cookie refresh token
+  C-->>B: access_token, refresh_token + refresh cookie
+
+  B->>C: POST /api/auth/refresh with refresh cookie
+  C->>A: POST /api/v1/auth/refresh with Cookie, Origin, Referer
+  A->>R: check old refresh token denylist
+  A->>R: denylist old refresh token after rotation
+  A-->>C: new TokenResponse + Set-Cookie
+  C-->>B: new access_token and refresh cookie
+
+  B->>C: GET /api/auth/me with Authorization Bearer
+  C->>A: GET /api/v1/auth/me with Authorization Bearer
+  A->>R: check access token denylist
+  A->>DB: load user by JWT sub
+  A-->>C: UserResponse
+  C-->>B: UserResponse
+
+  B->>C: POST /api/auth/logout with Authorization and refresh cookie
+  C->>A: POST /api/v1/auth/logout
+  A->>R: denylist access token and refresh token
+  A-->>C: 204 + clear refresh cookie
+  C-->>B: 204
+
+  S->>A: POST /api/v1/auth/verify with X-Service-Auth
+  A->>R: check token denylist
+  A->>DB: load user and role
+  A-->>S: TokenVerifyResponse(valid, user_id, role, email)

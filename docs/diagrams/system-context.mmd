@@ -1,0 +1,63 @@
+flowchart TB
+  user["External user"]
+  browser["Browser<br/>React frontend"]
+  ingress["Public edge<br/>Traefik in Docker or Kubernetes Ingress"]
+  composer["Composer / BFF<br/>FastAPI gateway and saga orchestrator"]
+  auth["Auth Service<br/>users, JWT, roles"]
+  paymentAuth["Payment Auth Service<br/>separate Auth instance for Payment UI"]
+  inventory["Inventory Service<br/>events, tickets, reservations"]
+  payment["Payment Service<br/>checkout, customers, payments, receipts, API keys"]
+
+  authDb[("Auth PostgreSQL<br/>users")]
+  authRedis[("Auth Redis<br/>token denylist")]
+  paymentAuthDb[("Payment Auth PostgreSQL<br/>users")]
+  paymentAuthRedis[("Payment Auth Redis<br/>token denylist")]
+  invDb[("Inventory PostgreSQL<br/>events, tickets, KPI events")]
+  invRedis[("Inventory Redis<br/>idempotency, rate limits")]
+  payDb[("Payment PostgreSQL<br/>customers, payments, sessions, receipts, API keys")]
+  payRedis[("Payment Redis<br/>rate limits, idempotency")]
+
+  vault["Vault<br/>dev secret bootstrap"]
+  otel["OpenTelemetry Collector<br/>OTLP 4317/4318"]
+  prometheus["Prometheus<br/>scrapes /metrics and OTel 8889"]
+  grafana["Grafana<br/>dashboards"]
+  jaeger["Jaeger<br/>traces"]
+  mailhog["MailHog<br/>SMTP + mail UI"]
+
+  user -->|"HTTPS/HTTP public host"| browser
+  browser -->|"GET / and /api/*"| ingress
+  ingress -->|"/ -> composer:8000"| composer
+  ingress -->|"/auth"| auth
+  ingress -->|"/payment-auth"| paymentAuth
+  ingress -->|"/inventory"| inventory
+  ingress -->|"/payment"| payment
+
+  composer -->|"Auth proxy /api/v1/auth/*<br/>Authorization, cookies"| auth
+  composer -->|"verify token<br/>X-Service-Auth"| auth
+  composer -->|"events/tickets/reservations<br/>X-API-Key, Idempotency-Key"| inventory
+  composer -->|"checkout/payments/customers<br/>X-API-Key, Idempotency-Key"| payment
+
+  payment -->|"verify end-user token<br/>X-Service-Auth"| paymentAuth
+  payment -->|"dev email SMTP"| mailhog
+
+  auth --> authDb
+  auth --> authRedis
+  paymentAuth --> paymentAuthDb
+  paymentAuth --> paymentAuthRedis
+  inventory --> invDb
+  inventory --> invRedis
+  payment --> payDb
+  payment --> payRedis
+
+  vault -.->|"Vault init writes shared secrets"| composer
+  vault -.->|"Vault init writes payment/API secrets"| payment
+
+  composer -->|"OTLP traces/metrics"| otel
+  auth -->|"OTLP traces/metrics"| otel
+  paymentAuth -->|"OTLP traces/metrics"| otel
+  inventory -->|"OTLP traces/metrics"| otel
+  payment -->|"OTLP traces/metrics"| otel
+  otel -->|"traces"| jaeger
+  otel -->|"metrics endpoint :8889"| prometheus
+  composer -->|"/metrics KPI export"| prometheus
+  prometheus --> grafana

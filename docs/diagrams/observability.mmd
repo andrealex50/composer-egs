@@ -1,0 +1,26 @@
+flowchart TB
+  composer["Composer<br/>/metrics KPI export"]
+  auth["Auth Service"]
+  paymentAuth["Payment Auth Service"]
+  inventory["Inventory Service"]
+  payment["Payment Service"]
+  otel["OpenTelemetry Collector<br/>OTLP gRPC 4317, HTTP 4318<br/>Prometheus exporter 8889"]
+  prometheus["Prometheus<br/>scrape composer:8000/metrics<br/>scrape otel-collector:8889"]
+  grafana["Grafana<br/>/grafana"]
+  jaeger["Jaeger<br/>/jaeger"]
+  mailhog["MailHog<br/>SMTP 1025, UI /mail"]
+
+  composer -->|"OTLP traces/metrics"| otel
+  auth -->|"OTLP traces/metrics"| otel
+  paymentAuth -->|"OTLP traces/metrics"| otel
+  inventory -->|"OTLP traces/metrics"| otel
+  payment -->|"OTLP traces/metrics"| otel
+  otel -->|"traces via OTLP"| jaeger
+  otel -->|"metrics at :8889"| prometheus
+  composer -->|"Prometheus text /metrics"| prometheus
+  prometheus -->|"datasource"| grafana
+  payment -->|"SMTP dev mail"| mailhog
+  auth -->|"SMTP dev mail for password reset"| mailhog
+
+  note1["Prometheus config has two scrape jobs:<br/>composer-kpis at /metrics and otel-collector at :8889."]
+  prometheus -.-> note1

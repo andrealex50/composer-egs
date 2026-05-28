@@ -1,0 +1,49 @@
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant C as Composer
+  participant A as Auth Service
+  participant I as Inventory Service
+  participant P as Payment Service
+  participant PA as Payment Auth Service
+
+  B->>C: POST /api/checkout with Authorization Bearer
+  C->>A: GET /api/v1/auth/me
+  A-->>C: user profile
+  C->>I: GET /api/v1/events/{event_id} with X-API-Key
+  I-->>C: published event
+  C->>I: GET /api/v1/events/{event_id}/tickets?status=available
+  I-->>C: available tickets
+  loop quantity
+    C->>I: PUT /api/v1/tickets/{ticket_id}/reserve with X-API-Key and Idempotency-Key
+    I-->>C: reserved ticket
+  end
+  C->>P: POST /api/v1/checkout with X-API-Key and Idempotency-Key
+  P-->>C: checkout_session + checkout_url
+  C-->>B: checkout_url rewritten to public payment URL
+
+  B->>P: GET /payment/checkout/{session_id}
+  B->>P: POST /payment/api/v1/checkout/{session_id}/authorize with Authorization Bearer
+  P->>PA: POST /api/v1/auth/verify with X-Service-Auth
+  PA-->>P: valid customer claims
+  P->>P: create or bind customer, create succeeded payment, complete session
+  P-->>B: success_url redirect to Composer
+
+  B->>C: GET /api/checkout/success?session_id=...
+  C->>P: GET /api/v1/checkout/{session_id} with X-API-Key
+  P-->>C: payment_status=paid and metadata ticket_ids
+  loop each reserved ticket
+    C->>I: PUT /api/v1/tickets/{ticket_id}/sell with X-API-Key
+    I-->>C: sold ticket
+  end
+  C-->>B: redirect to frontend success URL
+
+  alt payment session creation fails or partial reservation fails
+    C->>I: DELETE /api/v1/tickets/{reserved_id} with X-API-Key
+    I-->>C: reservation released
+    C-->>B: error
+  else user cancels checkout
+    B->>C: GET /api/checkout/cancel?tickets=...
+    C->>I: DELETE /api/v1/tickets/{ticket_id} with X-API-Key
+    C-->>B: redirect to frontend cancel URL
+  end

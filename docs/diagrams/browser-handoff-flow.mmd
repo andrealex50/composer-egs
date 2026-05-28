@@ -1,0 +1,28 @@
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant F as Composer React frontend
+  participant AU as Auth UI
+  participant C as Composer
+  participant A as Auth Service
+
+  B->>F: User chooses login
+  F-->>B: redirect to Auth UI with return_to and state
+  B->>AU: GET /auth/templates/login.html
+  AU->>A: POST /auth/api/v1/auth/login
+  A-->>AU: access token, refresh token cookie
+  AU->>C: POST /api/auth/browser/handoff with access_token, optional refresh_token, return_to, state
+  C->>A: POST /api/v1/auth/verify with X-Service-Auth
+  A-->>C: valid user claims
+  C->>C: store one-time code in in-memory handoff cache
+  C-->>AU: redirect_to return_to?code=...&state=...
+  AU-->>B: browser redirects to Composer frontend
+  B->>F: GET /?code=...&state=...
+  F->>C: POST /api/auth/browser/exchange with code and state
+  C->>C: consume one-time code and validate state/TTL
+  C->>A: POST /api/v1/auth/verify with X-Service-Auth
+  A-->>C: valid user claims
+  C-->>F: access_token, refresh_token, user
+  F-->>B: local Composer session is established
+
+  Note over C: Composer uses an in-memory cache for handoff codes.<br/>Kubernetes keeps Composer at 1 replica so the exchange reaches the same cache.
