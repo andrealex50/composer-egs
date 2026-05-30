@@ -1272,8 +1272,9 @@ function App() {
               {eventsError && <p className="error-msg">{eventsError}</p>}
               {events.length === 0 && !eventsError && (
                 <div className="empty-state empty-state-card">
-                  <p className="empty-state-title">Sem eventos publicados</p>
-                  <p>Quando o Inventory publicar eventos, eles aparecem aqui.</p>
+                  <div className="empty-state-featured-image" style={{ backgroundImage: `url(${featuredEventImage})` }} />
+                  <p className="empty-state-title">Ainda não há eventos criados</p>
+                  <p>A imagem de destaque já está pronta; quando o primeiro evento for publicado no Inventory, aparece aqui com os bilhetes.</p>
                 </div>
               )}
               {events.slice(0, 12).map((ev, evIdx) => {
