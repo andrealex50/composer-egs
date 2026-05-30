@@ -1,47 +1,70 @@
 ---
 marp: true
-title: FlashSale - Composer / API Gateway
+title: FlashSale - EGS Microsserviços
 paginate: true
 ---
 
 # FlashSale
 
-## Composer / API Gateway
+## Plataforma de bilhetes com microsserviços
 
-Plataforma de venda de bilhetes para eventos, com autenticação, inventário, pagamentos e checkout orquestrado num único fluxo.
-
----
-
-# Ideia
-
-FlashSale é uma plataforma para comprar e gerir bilhetes de eventos.
-
-O utilizador entra no frontend, consulta eventos publicados, adiciona bilhetes ao carrinho e faz checkout através de um fluxo de pagamento separado.
-
-Por trás, o Composer junta serviços independentes e apresenta ao frontend uma API única.
+Composer / API Gateway, Auth, Inventory, Payment e checkout orquestrado.
 
 ---
 
-# Problema
+# Visão Geral
 
-Sem Composer, o frontend teria de conhecer diretamente vários serviços:
+FlashSale permite consultar eventos, reservar bilhetes, pagar e receber confirmação de compra num fluxo único.
 
-- Auth para login, sessão e perfil
-- Inventory para eventos, bilhetes e reservas
-- Payment para conta de pagamento, checkout e recibos
-- regras de compensação quando uma compra falha
-
-Isto aumenta acoplamento e espalha lógica de negócio pelo browser.
+Por trás da interface existem serviços independentes, cada um dono do seu domínio.
 
 ---
 
-# Solução
+# Stakeholders
 
-O Composer funciona como API Gateway e Backend for Frontend.
+## Fãs / Compradores
 
-Ele recebe chamadas `/api/*` do frontend, fala com os microsserviços internos e devolve uma resposta já adaptada à experiência da aplicação.
+Querem encontrar eventos, comprar bilhetes e receber confirmação rapidamente.
 
-Também concentra fluxos de orquestração como checkout, cancelamento e reembolso.
+## Promotores
+
+Querem criar eventos, gerir bilhetes e acompanhar vendas.
+
+---
+
+# Stakeholders
+
+## Operação
+
+Precisa de health checks, métricas, logs e tracing para perceber falhas entre serviços.
+
+## Pagamentos
+
+Precisa de checkout, recibos, cancelamentos e uma separação clara entre pagamento e inventário.
+
+---
+
+# Serviços Fornecidos
+
+- Autenticação e sessão de utilizadores
+- Catálogo de eventos
+- Inventário de bilhetes
+- Carrinho e checkout
+- Pagamentos e recibos
+- KPIs, métricas e observabilidade
+
+---
+
+# Decisões de Escopo
+
+O projeto privilegia integração entre serviços e consistência do fluxo principal.
+
+Algumas funcionalidades ficam simples de propósito:
+
+- Payment UI separado do frontend principal
+- Auth UI separado para login/registo
+- Composer sem base de dados própria de negócio
+- compensações SAGA sem rollback total de bilhetes já vendidos
 
 ---
 
@@ -51,102 +74,144 @@ meter aqui diagrama-arquitectura
 
 ---
 
-# Componentes
+# Ideia Da Arquitectura
 
-## Frontend React
+O frontend fala com uma API pública única: o Composer.
 
-Interface usada pelo cliente para:
+O Composer encaminha chamadas para os serviços certos e esconde do browser os detalhes internos de Auth, Inventory e Payment.
 
-- consultar eventos publicados
-- gerir carrinho
-- autenticar sessão
-- iniciar checkout
-- consultar conta, pagamentos e recibos
-
-Durante desenvolvimento, o Vite encaminha a API principal `/api/*` para o Composer. Login e checkout podem abrir UIs próprias do Auth e do Payment.
+Cada serviço mantém a sua própria base de dados.
 
 ---
 
-# Componentes
+# Composer / API Gateway
 
-## Composer / API Gateway
+---
+
+# Composer - Ideia Principal
+
+O Composer funciona como Backend for Frontend.
 
 Responsabilidades:
 
-- expor uma API única ao frontend
-- fazer proxy para Auth, Inventory e Payment
-- enriquecer dados de eventos com preço mínimo
-- aplicar regras de roles para operações de gestão
-- orquestrar checkout e reembolso
-- expor health checks, métricas e KPI dashboard
+- expor `/api/*` ao frontend
+- validar sessão quando necessário
+- transformar respostas para a UI
+- orquestrar checkout e carrinho
+- aplicar compensações quando uma etapa falha
 
 ---
 
-# Componentes
+# Composer - Operações
 
-## Auth Service
+O Composer não é dono dos dados principais.
 
-Responsável por identidade e sessão:
+Ele coordena:
 
-- registo e login
+- Auth para identidade
+- Inventory para eventos e bilhetes
+- Payment para checkout, pagamentos e recibos
+
+Isto reduz acoplamento no frontend e centraliza fluxos de negócio.
+
+---
+
+# Auth Service
+
+---
+
+# Auth - Ideia Principal
+
+O Auth Service é responsável por identidade.
+
+Inclui:
+
+- registo
+- login
 - refresh token
 - perfil do utilizador
 - logout
 - reset de password
 - verificação interna de tokens
 
-O Composer usa o Auth para validar quem está a comprar ou a gerir eventos.
+---
+
+# Auth - Contrato
+
+O Composer usa endpoints internos `/api/v1/auth/*`.
+
+Mecanismos importantes:
+
+- JWT Bearer token
+- refresh token
+- roles `fan`, `promoter` e `admin`
+- Redis para denylist / estado de tokens
+- `X-Service-Auth` para verificação interna
 
 ---
 
-# Componentes
-
-## Inventory Service
-
-Responsável por stock e ciclo de vida dos bilhetes:
-
-- eventos publicados
-- criação e atualização de eventos
-- emissão de bilhetes por evento
-- reserva temporária de bilhetes
-- confirmação de venda
-- validação de utilização
-- cancelamento de reservas
-
-É a fonte de verdade para disponibilidade.
+# Inventory Service
 
 ---
 
-# Componentes
+# Inventory - Ideia Principal
 
-## Payment Service
+O Inventory Service é a fonte de verdade para eventos, bilhetes e disponibilidade.
 
-Responsável por pagamentos e checkout:
+Inclui:
 
-- criação de hosted checkout sessions
-- conta local de pagamento
-- carteira / wallet UI
-- listagem de pagamentos
-- confirmação ou cancelamento
+- criação e publicação de eventos
+- criação de bilhetes
+- consulta de stock
+- reserva temporária
+- venda
+- validação de entrada
+- cancelamento/libertação quando aplicável
+
+---
+
+# Inventory - Ciclo Do Bilhete
+
+O ciclo principal é:
+
+`available -> reserved -> sold -> used`
+
+Durante checkout, o Composer reserva primeiro. Só depois de o Payment confirmar pagamento é que o bilhete passa para vendido.
+
+---
+
+# Payment Service
+
+---
+
+# Payment - Ideia Principal
+
+O Payment Service trata do lado financeiro.
+
+Inclui:
+
+- hosted checkout
+- pagamentos
+- confirmação
+- cancelamento/refund
+- clientes
 - recibos
-- refund/cancel quando necessário
+- API keys
 
-O checkout é iniciado pelo Composer, mas a autorização do pagamento acontece no Payment.
+O utilizador pode ser redirecionado para a UI própria de pagamento.
 
 ---
 
-# Componentes
+# Payment - Integração
 
-## Infraestrutura
+O Composer cria a checkout session e recebe o `checkout_url`.
 
-- Traefik: entrada HTTP e roteamento por domínio
-- Vault: gestão de segredos em ambiente local
-- Postgres: persistência por serviço
-- Redis: cache/sessões/apoio operacional por serviço
-- OpenTelemetry Collector: recolha de métricas
-- Prometheus: armazenamento de métricas
-- Grafana: dashboards
-- Jaeger: tracing
+Depois:
+
+- o browser abre a Payment UI
+- o Payment valida a autorização
+- o Payment redireciona o browser para sucesso ou cancelamento
+- o Composer consulta o estado final e atualiza o Inventory
 
 ---
 
@@ -156,55 +221,42 @@ meter aqui diagrama-apis
 
 ---
 
-# APIs - Auth
+# APIs - Composer
 
-Principais endpoints expostos pelo Composer:
+O frontend chama apenas rotas `/api/*`.
 
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `POST /api/auth/refresh`
-- `GET /api/auth/me`
-- `POST /api/auth/logout`
-- `POST /api/auth/forgot-password`
-- `POST /api/auth/reset-password`
-- `DELETE /api/auth/me`
-- `POST /api/auth/browser/handoff`
-- `POST /api/auth/browser/exchange`
+Grupos principais:
 
-Internamente mapeia para `/api/v1/auth/*` no Auth Service.
+- `/api/auth/*`
+- `/api/events`
+- `/api/tickets/*`
+- `/api/payment-account`
+- `/api/payments/*`
+- `/api/checkout`
+- `/api/refund`
+- `/health` e `/metrics`
 
 ---
 
-# APIs - Eventos e Bilhetes
+# APIs - Bilhetes
 
-Eventos:
+Rotas relevantes no Composer:
 
-- `GET /api/events`
-- `POST /api/events`
-- `GET /api/events/{event_id}`
-- `PUT /api/events/{event_id}`
-- `DELETE /api/events/{event_id}`
-
-Bilhetes:
-
-- `POST /api/events/{event_id}/tickets`
-- `GET /api/events/{event_id}/tickets`
 - `GET /api/tickets/{ticket_id}`
-- `GET /api/tickets/{ticket_id}/availability`
 - `PUT /api/tickets/{ticket_id}/reserve`
 - `PUT /api/tickets/{ticket_id}/sell`
 - `PUT /api/tickets/{ticket_id}/use`
 - `DELETE /api/tickets/{ticket_id}`
-- `POST /api/tickets/{ticket_id}/cancel` alias de compatibilidade
+- `POST /api/tickets/{ticket_id}/cancel`
+
+`POST /cancel` existe como alias de compatibilidade para o frontend.
 
 ---
 
-# APIs - Pagamentos e Checkout
+# APIs - Pagamentos
 
-Pagamentos:
+Rotas principais no Composer:
 
-- `GET /api/payment-account`
-- `POST /api/payment-account/setup`
 - `GET /api/payments`
 - `POST /api/payments`
 - `GET /api/payments/{payment_id}`
@@ -212,17 +264,22 @@ Pagamentos:
 - `POST /api/payments/{payment_id}/cancel`
 - `GET /api/payments/{payment_id}/receipt`
 
-Checkout:
-
-- `POST /api/checkout`
-- `POST /api/checkout/cart`
-- `GET /api/checkout/success`
-- `GET /api/checkout/cancel`
-- `POST /api/refund`
+No Payment Service, o cancelamento interno pode mapear para `DELETE /api/v1/payments/{payment_id}`.
 
 ---
 
-# Fluxo Principal
+# Contratos E Segurança
+
+- `Authorization: Bearer <token>` para utilizadores autenticados
+- `X-API-Key` para Inventory e Payment
+- `X-Service-Auth` para verificação interna
+- `Idempotency-Key` em mutações críticas
+- `X-Request-ID` / `X-Correlation-ID` para rastreabilidade
+- CORS configurado para as origens esperadas
+
+---
+
+# Fluxo De Checkout
 
 meter aqui diagrama-checkout
 
@@ -230,67 +287,63 @@ meter aqui diagrama-checkout
 
 # Orquestração SAGA
 
-O checkout não é uma única transação de base de dados.
+O checkout não é uma transação única.
 
-Por isso o Composer usa compensações:
+O Composer coordena passos independentes:
 
-- se a reserva falha, não cria pagamento
-- se o Payment falha, cancela as reservas criadas
-- se o utilizador cancela checkout, liberta os bilhetes
-- se o pagamento não fica pago, cancela as reservas
-- se a confirmação de venda falha, evita repetir efeitos, propaga erro e só liberta reservas que ainda estejam reservadas
-
-Isto evita bilhetes presos ou vendidos sem pagamento válido.
+1. valida utilizador
+2. reserva bilhetes
+3. cria checkout session
+4. confirma pagamento
+5. vende bilhetes reservados
 
 ---
 
-# Segurança
+# Compensações
 
-Principais mecanismos:
+Se algo falha, o Composer evita repetir efeitos, propaga o erro e só liberta reservas que ainda estejam reservadas.
 
-- JWT Bearer token para chamadas autenticadas
-- refresh token via Auth
-- `INTERNAL_SERVICE_KEY` para chamadas internas privilegiadas
-- `INVENTORY_API_KEY` e `PAYMENT_API_KEY` para integração entre serviços
-- roles `admin` e `promoter` para gerir eventos e bilhetes
-- CORS limitado às origens esperadas do frontend
-- idempotency keys em mutações críticas
+Exemplos:
+
+- se a reserva falha, não cria pagamento
+- se o Payment falha, liberta reservas criadas
+- se o utilizador cancela, cancela reservas pendentes
+- se um bilhete já foi vendido, não promete rollback total
 
 ---
 
 # Observabilidade
 
-O sistema expõe:
+O sistema inclui:
 
-- `GET /health` para estado geral e dependências
-- `/metrics` para Prometheus
-- `/api/kpi/dashboard` para dashboard operacional no frontend
+- health checks por serviço
+- métricas para Prometheus
+- dashboards em Grafana
 - tracing via OpenTelemetry e Jaeger
-- métricas agregadas em Prometheus/Grafana
-
-Isto ajuda a perceber rapidamente se Auth, Inventory ou Payment estão offline.
+- MailHog para email em ambiente de desenvolvimento
+- KPI dashboard agregado pelo Composer
 
 ---
 
-# Demonstração
+# Demo
 
 Fluxo recomendado:
 
-1. Abrir frontend React.
-2. Registar/login no Auth.
-3. Criar ou usar evento publicado.
-4. Criar bilhetes para o evento.
-5. Comprar bilhete pelo checkout.
-6. Confirmar que o carrinho fica limpo após sucesso.
-7. Ver pagamentos/recibos na área de conta.
-8. Mostrar `GET /health` com serviços online.
+1. abrir frontend
+2. fazer login/registo
+3. consultar eventos
+4. escolher bilhete
+5. comprar pelo checkout
+6. voltar ao sucesso
+7. confirmar carrinho limpo
+8. ver health/métricas
 
 ---
 
 # Resultado
 
-O Composer reduz a complexidade no frontend e dá uma API única para a experiência FlashSale.
+O FlashSale apresenta ao utilizador uma experiência contínua:
 
-A arquitectura fica separada por domínios, mas o utilizador vê um fluxo contínuo:
+`evento -> carrinho -> reserva -> pagamento -> bilhete vendido`
 
-evento -> carrinho -> reserva -> pagamento -> bilhete vendido
+Internamente, a solução mantém serviços separados por domínio, contratos explícitos e observabilidade para diagnosticar falhas.
