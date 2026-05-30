@@ -47,16 +47,7 @@ Também concentra fluxos de orquestração como checkout, cancelamento e reembol
 
 # Arquitectura
 
-Diagrama principal: [diagrama-arquitectura.md](./diagrama-arquitectura.md)
-
-Camadas principais:
-
-- Frontend React
-- Composer / FastAPI Gateway como BFF
-- Auth, Inventory e Payment como microsserviços independentes
-- Payment Auth separado para o checkout/wallet
-- Postgres e Redis por domínio
-- Traefik/Ingress, Vault e observabilidade
+meter aqui diagrama-arquitectura
 
 ---
 
@@ -161,19 +152,7 @@ O checkout é iniciado pelo Composer, mas a autorização do pagamento acontece 
 
 # APIs
 
-Mapa de APIs: [diagrama-apis.md](./diagrama-apis.md)
-
-A experiência principal do frontend chama o Composer para `/api/*`, mas as UIs de Auth e Payment também existem como páginas próprias:
-
-| Domínio | Prefixo público |
-| --- | --- |
-| Auth | `/api/auth/*` |
-| Eventos | `/api/events/*` |
-| Bilhetes | `/api/events/{id}/tickets`, `/api/tickets/*` |
-| Reservas | `/api/reservations/*` |
-| Pagamentos | `/api/payments/*`, `/api/payment-account` |
-| Checkout | `/api/checkout`, `/api/checkout/cart` |
-| Observabilidade | `/health`, `/metrics`, `/api/kpi/dashboard` |
+meter aqui diagrama-apis
 
 ---
 
@@ -245,16 +224,7 @@ Checkout:
 
 # Fluxo Principal
 
-Diagrama do checkout: [diagrama-checkout.md](./diagrama-checkout.md)
-
-1. Utilizador escolhe evento e bilhetes.
-2. Frontend pede checkout ao Composer.
-3. Composer valida sessão no Auth.
-4. Composer reserva bilhetes no Inventory.
-5. Composer cria checkout session no Payment.
-6. Utilizador paga no hosted checkout.
-7. O browser regressa ao Composer pelo `success_url`.
-8. Composer confirma venda dos bilhetes no Inventory.
+meter aqui diagrama-checkout
 
 ---
 
