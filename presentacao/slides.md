@@ -52,12 +52,11 @@ Diagrama principal: [diagrama-arquitectura.md](./diagrama-arquitectura.md)
 Camadas principais:
 
 - Frontend React
-- Composer / FastAPI Gateway
-- Auth Service
-- Inventory Service
-- Payment Service
+- Composer / FastAPI Gateway como BFF
+- Auth, Inventory e Payment como microsserviços independentes
+- Payment Auth separado para o checkout/wallet
 - Postgres e Redis por domínio
-- Vault, Traefik e observabilidade
+- Traefik/Ingress, Vault e observabilidade
 
 ---
 
@@ -73,7 +72,7 @@ Interface usada pelo cliente para:
 - iniciar checkout
 - consultar conta, pagamentos e recibos
 
-Durante desenvolvimento, o Vite encaminha `/api/*` para o Composer.
+Durante desenvolvimento, o Vite encaminha a API principal `/api/*` para o Composer. Login e checkout podem abrir UIs próprias do Auth e do Payment.
 
 ---
 
@@ -164,7 +163,7 @@ O checkout é iniciado pelo Composer, mas a autorização do pagamento acontece 
 
 Mapa de APIs: [diagrama-apis.md](./diagrama-apis.md)
 
-O frontend chama sempre o Composer:
+A experiência principal do frontend chama o Composer para `/api/*`, mas as UIs de Auth e Payment também existem como páginas próprias:
 
 | Domínio | Prefixo público |
 | --- | --- |
@@ -254,7 +253,7 @@ Diagrama do checkout: [diagrama-checkout.md](./diagrama-checkout.md)
 4. Composer reserva bilhetes no Inventory.
 5. Composer cria checkout session no Payment.
 6. Utilizador paga no hosted checkout.
-7. Payment chama callback do Composer.
+7. O browser regressa ao Composer pelo `success_url`.
 8. Composer confirma venda dos bilhetes no Inventory.
 
 ---

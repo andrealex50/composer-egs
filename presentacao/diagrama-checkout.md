@@ -8,6 +8,7 @@ sequenceDiagram
     participant A as Auth Service
     participant I as Inventory Service
     participant P as Payment Service
+    participant PA as Payment Auth Service
     participant B as Browser
 
     U->>FE: escolhe bilhetes e confirma compra
@@ -29,7 +30,9 @@ sequenceDiagram
     C-->>FE: checkout_url
     FE-->>B: redireciona para hosted checkout
 
-    B->>P: utilizador autoriza pagamento
+    B->>P: POST /api/v1/checkout/{session_id}/authorize
+    P->>PA: POST /api/v1/auth/verify
+    PA-->>P: token valido
     P-->>B: redirect success_url
     B->>C: GET /api/checkout/success?session_id=...
     C->>P: GET /api/v1/checkout/{session_id}

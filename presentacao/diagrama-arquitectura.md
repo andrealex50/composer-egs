@@ -1,72 +1,93 @@
 # Diagrama - Arquitectura
 
 ```mermaid
-flowchart LR
-    USER[Utilizador] --> FE[Frontend React]
-    FE -->|/api/*| COMPOSER[Composer / FastAPI API Gateway]
-    FE -. login/register .-> AUTH_UI[Auth Frontend]
-    FE -. hosted checkout .-> PAY_UI[Payment Wallet / Checkout UI]
+flowchart TB
+    USER["Utilizador"] --> BROWSER["Browser"]
 
-    subgraph EDGE[Edge]
-        TRAEFIK[Traefik]
+    subgraph EDGE["Edge / entrada publica"]
+        TRAEFIK["Traefik / Ingress"]
+        ROOT["/ -> Composer + Frontend"]
+        AUTH_PUBLIC["/auth -> Auth API<br/>/auth/templates + /auth/static -> Auth UI"]
+        INV_PUBLIC["/inventory -> Inventory API"]
+        PAY_PUBLIC["/payment -> Payment API + Wallet UI"]
+        PAY_AUTH_PUBLIC["/payment-auth -> Payment Auth API"]
     end
 
-    TRAEFIK --> COMPOSER
-    TRAEFIK --> AUTH_UI
-    TRAEFIK --> PAY_UI
+    BROWSER --> TRAEFIK
+    TRAEFIK --> ROOT
+    TRAEFIK --> AUTH_PUBLIC
+    TRAEFIK --> INV_PUBLIC
+    TRAEFIK --> PAY_PUBLIC
+    TRAEFIK --> PAY_AUTH_PUBLIC
 
-    subgraph SERVICES[Microsserviços]
-        COMPOSER
-        AUTH[Auth Service]
-        INVENTORY[Inventory Service]
-        PAYMENT[Payment Service]
-        PAYMENT_AUTH[Payment Auth Service]
+    subgraph FRONTEND["Experiencia browser"]
+        FE["Frontend React"]
+        AUTH_UI["Auth UI"]
+        PAY_UI["Payment Wallet / Checkout UI"]
     end
 
-    COMPOSER -->|/api/v1/auth/*| AUTH
-    COMPOSER -->|/api/v1/events + /api/v1/tickets| INVENTORY
-    COMPOSER -->|/api/v1/checkout + /api/v1/payments| PAYMENT
-    PAYMENT -->|verify token| PAYMENT_AUTH
+    ROOT --> FE
+    AUTH_PUBLIC --> AUTH_UI
+    PAY_PUBLIC --> PAY_UI
 
-    subgraph AUTH_DATA[Auth Data]
-        AUTH_DB[(Auth Postgres)]
-        AUTH_REDIS[(Auth Redis)]
+    subgraph SERVICES["Microsservicos independentes"]
+        COMPOSER["Composer / BFF<br/>orquestracao e API publica /api/*"]
+        AUTH["Auth Service<br/>identidade, JWT, roles"]
+        INVENTORY["Inventory Service<br/>eventos, bilhetes, reservas"]
+        PAYMENT["Payment Service<br/>checkout, pagamentos, recibos"]
+        PAYMENT_AUTH["Payment Auth Service<br/>auth separado para Payment"]
     end
 
-    subgraph INV_DATA[Inventory Data]
-        INV_DB[(Inventory Postgres)]
-        INV_REDIS[(Inventory Redis)]
-    end
+    FE -->|"/api/*"| COMPOSER
+    AUTH_UI -->|"login/register"| AUTH
+    PAY_UI -->|"hosted checkout / wallet"| PAYMENT
 
-    subgraph PAY_DATA[Payment Data]
-        PAY_DB[(Payment Postgres)]
-        PAY_REDIS[(Payment Redis)]
+    COMPOSER -->|"proxy auth<br/>/api/v1/auth/*"| AUTH
+    COMPOSER -->|"eventos + bilhetes<br/>X-API-Key"| INVENTORY
+    COMPOSER -->|"checkout + payments<br/>X-API-Key"| PAYMENT
+    PAYMENT -->|"verify Bearer token<br/>X-Service-Auth"| PAYMENT_AUTH
+
+    subgraph DATA["Dados por dominio"]
+        AUTH_DB[("Auth Postgres")]
+        AUTH_REDIS[("Auth Redis")]
+        PAUTH_DB[("Payment Auth Postgres")]
+        PAUTH_REDIS[("Payment Auth Redis")]
+        INV_DB[("Inventory Postgres")]
+        INV_REDIS[("Inventory Redis")]
+        PAY_DB[("Payment Postgres")]
+        PAY_REDIS[("Payment Redis")]
     end
 
     AUTH --> AUTH_DB
     AUTH --> AUTH_REDIS
+    PAYMENT_AUTH --> PAUTH_DB
+    PAYMENT_AUTH --> PAUTH_REDIS
     INVENTORY --> INV_DB
     INVENTORY --> INV_REDIS
     PAYMENT --> PAY_DB
     PAYMENT --> PAY_REDIS
 
-    subgraph OPS[Operação]
-        VAULT[Vault]
-        OTEL[OpenTelemetry Collector]
-        PROM[Prometheus]
-        GRAF[Grafana]
-        JAEGER[Jaeger]
+    subgraph OPS["Operacao e observabilidade"]
+        VAULT["Vault<br/>secrets/config bootstrap"]
+        OTEL["OpenTelemetry Collector"]
+        PROM["Prometheus"]
+        GRAF["Grafana"]
+        JAEGER["Jaeger"]
+        MAIL["MailHog"]
     end
 
-    VAULT -. secrets/config bootstrap .-> COMPOSER
-    VAULT -. secrets/config bootstrap .-> AUTH
-    VAULT -. secrets/config bootstrap .-> INVENTORY
-    VAULT -. secrets/config bootstrap .-> PAYMENT
+    VAULT -. bootstrap .-> COMPOSER
+    VAULT -. bootstrap .-> AUTH
+    VAULT -. bootstrap .-> INVENTORY
+    VAULT -. bootstrap .-> PAYMENT
     COMPOSER --> OTEL
     AUTH --> OTEL
+    PAYMENT_AUTH --> OTEL
     INVENTORY --> OTEL
     PAYMENT --> OTEL
     OTEL --> PROM
     OTEL --> JAEGER
     PROM --> GRAF
+    AUTH -. email dev .-> MAIL
+    PAYMENT -. email dev .-> MAIL
 ```
