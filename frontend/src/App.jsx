@@ -376,7 +376,7 @@ function App() {
   }, [mainView]);
   const accountStorageKey = deriveAccountStorageKey(user);
 
-  useEffect(() => { fetchEvents(); }, []);
+  useEffect(() => { fetchEvents(token); }, [token]);
 
   useEffect(() => {
     localStorage.setItem('flashsale_token', token || '');
@@ -562,10 +562,11 @@ function App() {
     return () => { cancelled = true; };
   }, [token]);
 
-  const fetchEvents = () => {
+  const fetchEvents = (activeToken = token) => {
     setLoadingEvents(true);
     setEventsError('');
-    axios.get(`${API_BASE_URL}/api/events`)
+    const config = activeToken ? { headers: { Authorization: `Bearer ${activeToken}` } } : {};
+    axios.get(`${API_BASE_URL}/api/events`, config)
       .then((res) => { setEvents(res.data?.data || []); setLoadingEvents(false); })
       .catch((err) => { setEventsError(extractErrorMessage(err, 'Could not load events')); setLoadingEvents(false); });
   };
@@ -1088,12 +1089,19 @@ function App() {
     return null;
   };
 
-  const getEventImage = (ev) => {
-    const imageUrl = String(ev?.image_url || '').trim();
-    if (imageUrl) return imageUrl;
+  const getEventFallbackImage = (ev) => {
     const seed = String(ev?.id || ev?.name || '');
     const idx = seed ? seed.charCodeAt(0) % EVENT_IMAGE_ASSETS.length : 0;
     return EVENT_IMAGE_ASSETS[idx];
+  };
+
+  const getEventBackgroundStyle = (ev) => {
+    const fallback = getEventFallbackImage(ev);
+    const remote = String(ev?.image_url || '').trim();
+    if (remote && /^https?:\/\//i.test(remote)) {
+      return { backgroundImage: `url("${remote}"), url("${fallback}")`, backgroundPosition: 'center', backgroundSize: 'cover' };
+    }
+    return { backgroundImage: `url("${fallback}")`, backgroundPosition: 'center', backgroundSize: 'cover' };
   };
 
   const copyEventUuid = async (eventId) => {
@@ -1122,7 +1130,7 @@ function App() {
   const initials = firstName.slice(0, 2).toUpperCase();
   const visibleMainView = mainView === 'account' && !token ? 'events' : mainView;
   const featuredEvent = events[0] || null;
-  const featuredEventImage = featuredEvent ? getEventImage(featuredEvent) : EVENT_IMAGE_ASSETS[1];
+  const featuredEventBgStyle = featuredEvent ? getEventBackgroundStyle(featuredEvent) : { backgroundImage: `url("${EVENT_IMAGE_ASSETS[1]}")`, backgroundPosition: 'center', backgroundSize: 'cover' };
   const mainViewTabs = [
     { id: 'events', label: 'Eventos', note: events.length > 0 ? `${events.length} em cartaz` : 'Descobre o que ha' },
     { id: 'wishlist', label: 'Favoritos', note: wishlistCount > 0 ? 'Guardados' : 'Para mais tarde', count: wishlistCount || null },
@@ -1224,7 +1232,7 @@ function App() {
               <div className="hero-stat"><strong>{wishlistCount}</strong><span>favoritos</span></div>
             </div>
           </div>
-          <div className="hero-art" style={{ backgroundImage: `url(${featuredEventImage})` }}>
+          <div className="hero-art" style={featuredEventBgStyle}>
             <div className="hero-art-shade" />
             <div className="hero-ticket-preview">
               <span className="ticket-preview-label">Em destaque</span>
@@ -1276,7 +1284,7 @@ function App() {
               {eventsError && <p className="error-msg">{eventsError}</p>}
               {events.length === 0 && !eventsError && (
                 <div className="empty-state empty-state-card">
-                  <div className="empty-state-featured-image" style={{ backgroundImage: `url(${featuredEventImage})` }} />
+                  <div className="empty-state-featured-image" style={featuredEventBgStyle} />
                   <p className="empty-state-title">Novas experiências a caminho</p>
                   <p>A seleção está a ser preparada. Em breve vais encontrar aqui os próximos concertos, festivais e noites de DJ.</p>
                 </div>
@@ -1292,7 +1300,7 @@ function App() {
                 return (
                   <article key={ev.id} className="event-card">
                     <div className="event-card-banner">
-                      <div className="event-card-banner-bg" style={{ backgroundImage: `url(${getEventImage(ev)})` }} />
+                      <div className="event-card-banner-bg" style={getEventBackgroundStyle(ev)} />
                       <div className="event-card-banner-overlay" />
                       {dateParts && (
                         <div className="event-date-badge">
@@ -1454,10 +1462,10 @@ function App() {
                 {cartItems.map((item) => {
                   const lineTotal = Number(item.quantity || 0) * Number(item.amount_cents_per_ticket || 0);
                   const relatedEvent = events.find((ev) => ev.id === item.event_id);
-                  const image = relatedEvent ? getEventImage(relatedEvent) : EVENT_IMAGE_ASSETS[0];
+                  const bgStyle = relatedEvent ? getEventBackgroundStyle(relatedEvent) : { backgroundImage: `url("${EVENT_IMAGE_ASSETS[0]}")`, backgroundPosition: 'center', backgroundSize: 'cover' };
                   return (
                     <div className="cart-item ticket-line" key={item.event_id}>
-                      <div className="ticket-line-image" style={{ backgroundImage: `url(${image})` }} />
+                      <div className="ticket-line-image" style={bgStyle} />
                       <div className="cart-item-main">
                         <div className="cart-item-title">{item.name || 'Unnamed event'}</div>
                         <div className="cart-item-meta">Codigo: {item.event_id?.slice(0, 8)}...</div>
