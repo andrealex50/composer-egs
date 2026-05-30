@@ -316,6 +316,7 @@ function App() {
   const [managerEventDate, setManagerEventDate] = useState('');
   const [managerEventVenue, setManagerEventVenue] = useState('');
   const [managerEventDescription, setManagerEventDescription] = useState('');
+  const [managerEventImageUrl, setManagerEventImageUrl] = useState('');
   const [managerTargetEventId, setManagerTargetEventId] = useState('');
   const [managerTargetEventStatus, setManagerTargetEventStatus] = useState('published');
   const [managerBatchEventId, setManagerBatchEventId] = useState('');
@@ -770,6 +771,7 @@ function App() {
         description: managerEventDescription.trim() || null,
         venue: managerEventVenue.trim() || null,
         date: new Date(managerEventDate).toISOString(),
+        image_url: managerEventImageUrl.trim() || null,
       }, { headers: { Authorization: `Bearer ${token}` } });
       const id = res.data?.id || '';
       setManagerTargetEventId(id);
@@ -1087,6 +1089,8 @@ function App() {
   };
 
   const getEventImage = (ev) => {
+    const imageUrl = String(ev?.image_url || '').trim();
+    if (imageUrl) return imageUrl;
     const seed = String(ev?.id || ev?.name || '');
     const idx = seed ? seed.charCodeAt(0) % EVENT_IMAGE_ASSETS.length : 0;
     return EVENT_IMAGE_ASSETS[idx];
@@ -1652,6 +1656,10 @@ function App() {
                         <div className="form-field" style={{ marginBottom: 0 }}>
                           <label>Description</label>
                           <input value={managerEventDescription} onChange={(e) => setManagerEventDescription(e.target.value)} placeholder="Short description…" />
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label>Image URL</label>
+                          <input value={managerEventImageUrl} onChange={(e) => setManagerEventImageUrl(e.target.value)} placeholder="https://example.com/event.jpg" />
                         </div>
                       </div>
                       <div className="btn-row">
