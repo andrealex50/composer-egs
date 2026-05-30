@@ -312,6 +312,82 @@ Exemplos:
 
 ---
 
+# Desempenho
+
+---
+
+# Desempenho - O Que Avaliamos
+
+O foco não foi só "quantos pedidos aguenta", mas sim se o sistema permite observar e diagnosticar desempenho.
+
+Métricas principais:
+
+- disponibilidade por serviço
+- latência dos health checks
+- chamadas API por serviço, método, endpoint e status
+- estado de tickets, pagamentos e checkout sessions
+- scrape contínuo por Prometheus
+
+---
+
+# Desempenho - Instrumentação
+
+O Composer expõe métricas Prometheus em `/metrics`.
+
+Prometheus recolhe:
+
+- `composer:8000/metrics`
+- `otel-collector:8889`
+
+Grafana usa Prometheus como datasource e mostra painéis de saúde, latência, inventário, pagamentos e chamadas API.
+
+---
+
+# Desempenho - Ensaio Local
+
+Medição feita nesta máquina, dentro do Docker:
+
+- `GET /metrics`: ~9.4 ms
+- `GET /health`: ~11.9 ms em modo degraded
+- Prometheus targets: `composer-kpis` e `otel-collector` estavam UP
+- scrape observado: Composer ~10 ms, OTel Collector ~1 ms
+
+Nota: Auth, Inventory e Payment estavam degradados nesta execução por volumes Postgres locais com passwords antigas. Por isso, estes números validam observabilidade e resposta do Composer, não carga end-to-end saudável.
+
+---
+
+# Desempenho - Prometheus
+
+![width:1120px](assets/prometheus-targets.png)
+
+---
+
+# Desempenho - Grafana
+
+![width:1120px](assets/grafana-kpis.png)
+
+---
+
+# Desempenho - Como Repetir
+
+Com a stack saudável:
+
+```bash
+docker compose up --build -d
+curl http://composer.flashsale/health
+curl http://composer.flashsale/metrics
+```
+
+Depois abrir Grafana e acompanhar:
+
+- Service Health
+- Service Latency
+- API Calls Total
+- Payment Success Rate
+- Checkout Conversion Rate
+
+---
+
 # Observabilidade
 
 O sistema inclui:
