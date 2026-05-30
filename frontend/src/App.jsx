@@ -1273,8 +1273,8 @@ function App() {
               {events.length === 0 && !eventsError && (
                 <div className="empty-state empty-state-card">
                   <div className="empty-state-featured-image" style={{ backgroundImage: `url(${featuredEventImage})` }} />
-                  <p className="empty-state-title">Ainda não há eventos criados</p>
-                  <p>A imagem de destaque já está pronta; quando o primeiro evento for publicado no Inventory, aparece aqui com os bilhetes.</p>
+                  <p className="empty-state-title">Novas experiências a caminho</p>
+                  <p>A seleção está a ser preparada. Em breve vais encontrar aqui os próximos concertos, festivais e noites de DJ.</p>
                 </div>
               )}
               {events.slice(0, 12).map((ev, evIdx) => {
