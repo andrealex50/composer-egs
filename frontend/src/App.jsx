@@ -1258,7 +1258,7 @@ function App() {
           <div className="section-header editorial-header">
             <div>
               <h2>Em Cartaz</h2>
-              <p>{events.length > 0 ? `${events.length} evento(s) publicados pelo Inventory.` : 'Vê o que vem a seguir.'}</p>
+              <p>{events.length > 0 ? `${events.length} evento(s) em cartaz.` : 'Vê o que vem a seguir.'}</p>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={fetchEvents}>Atualizar</button>
           </div>
