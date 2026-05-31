@@ -28,6 +28,7 @@ env/
 .coverage
 htmlcov/
 .mypy_cache/
+.test-runs/
 
 # Logs
 *.log
