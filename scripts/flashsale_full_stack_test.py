@@ -92,6 +92,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def clean_base_url(value: str) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
 @dataclass
 class HttpResult:
     method: str
@@ -160,13 +164,23 @@ class FlashSaleTester:
         self.state.fan_email = f"mega-{self.run_id}-{suffix}@test.pt"
         self.state.payment_auth_email = self.state.fan_email
 
-        self.host_bases = {
-            "composer": args.composer_base_url.rstrip("/"),
-            "auth": args.auth_base_url.rstrip("/"),
-            "payment_auth": args.payment_auth_base_url.rstrip("/"),
-            "inventory": args.inventory_base_url.rstrip("/"),
-            "payment": args.payment_base_url.rstrip("/"),
-        }
+        public_base = clean_base_url(args.public_base_url)
+        if public_base:
+            self.host_bases = {
+                "composer": public_base,
+                "auth": f"{public_base}/auth",
+                "payment_auth": f"{public_base}/payment-auth",
+                "inventory": f"{public_base}/inventory",
+                "payment": f"{public_base}/payment",
+            }
+        else:
+            self.host_bases = {
+                "composer": clean_base_url(args.composer_base_url),
+                "auth": clean_base_url(args.auth_base_url),
+                "payment_auth": clean_base_url(args.payment_auth_base_url),
+                "inventory": clean_base_url(args.inventory_base_url),
+                "payment": clean_base_url(args.payment_base_url),
+            }
         self.docker_bases = {
             "composer": "http://127.0.0.1:8000",
             "auth": "http://auth-service:8000",
@@ -174,6 +188,11 @@ class FlashSaleTester:
             "inventory": "http://inventory-service:8000",
             "payment": "http://payment-service:8000",
         }
+        self.browser_return_to = args.browser_return_to.strip()
+        if not self.browser_return_to and public_base:
+            self.browser_return_to = f"{public_base}/"
+        if not self.browser_return_to:
+            self.browser_return_to = "http://localhost:5173/"
 
     # ------------------------------------------------------------------
     # Logging and result accounting
@@ -238,6 +257,14 @@ class FlashSaleTester:
             query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
             url = f"{url}{'&' if '?' in url else '?'}{query}"
         return url
+
+    def checkout_url_uses_public_payment_route(self, checkout_url: str) -> bool:
+        if not checkout_url:
+            return False
+        if "payment.flashsale" in checkout_url:
+            return True
+        payment_base = self.service_base("payment")
+        return checkout_url.startswith(payment_base) or "/payment/checkout/" in checkout_url
 
     def request(
         self,
@@ -435,6 +462,12 @@ class FlashSaleTester:
         self.info(f"Run id: {self.run_id}")
         self.info(f"Mode: {self.mode}")
         self.info(f"Composer base: {self.service_base('composer')}")
+        self.info(f"Browser return_to: {self.browser_return_to}")
+        if self.mode == "host":
+            self.info(f"Auth base: {self.service_base('auth')}")
+            self.info(f"Payment Auth base: {self.service_base('payment_auth')}")
+            self.info(f"Inventory base: {self.service_base('inventory')}")
+            self.info(f"Payment base: {self.service_base('payment')}")
 
         try:
             self.test_sanity()
@@ -538,7 +571,7 @@ class FlashSaleTester:
             json_body={
                 "access_token": self.state.fan_token,
                 "refresh_token": self.state.fan_refresh,
-                "return_to": "http://localhost:5173/",
+                "return_to": self.browser_return_to,
                 "state": f"state-{self.run_id}",
             },
         )
@@ -819,7 +852,8 @@ class FlashSaleTester:
         metadata = checkout_data.get("metadata") if isinstance(checkout_data.get("metadata"), dict) else {}
         self.state.checkout_ticket_ids = [tid for tid in str(metadata.get("ticket_ids") or "").split(",") if tid]
         self.expect("Checkout session id present", bool(self.state.checkout_session_id), self.state.checkout_session_id)
-        self.expect("Checkout URL is public Payment URL", "checkout_url" in checkout_data and "payment.flashsale" in str(checkout_data.get("checkout_url")), str(checkout_data.get("checkout_url")))
+        checkout_url = str(checkout_data.get("checkout_url") or "")
+        self.expect("Checkout URL uses public Payment route", self.checkout_url_uses_public_payment_route(checkout_url), checkout_url)
 
         authz = self.request(
             "payment",
@@ -944,6 +978,13 @@ class FlashSaleTester:
             else:
                 self.warn("Delete test event", f"HTTP {delete_event.status}; leaving test event for inspection", delete_event.elapsed_ms)
 
+        if self.state.payment_auth_token:
+            resp = self.request("payment_auth", "DELETE", "/api/v1/auth/me", headers=self.bearer(self.state.payment_auth_token), json_body={"password": self.state.password})
+            if resp.status in {200, 204}:
+                self.pass_("Delete payment-auth account", self.state.payment_auth_email, resp.elapsed_ms)
+            else:
+                self.warn("Delete payment-auth account", f"HTTP {resp.status}; {resp.text[:180]}", resp.elapsed_ms)
+
         if self.state.fan_token:
             resp = self.request("composer", "DELETE", "/api/auth/me", headers=self.bearer(self.state.fan_token), json_body={"password": self.state.password})
             if resp.status in {200, 204}:
@@ -1001,11 +1042,27 @@ class FlashSaleTester:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Mega full-stack tester for FlashSale / Composer EGS.")
     parser.add_argument("--mode", choices=["auto", "host", "docker"], default=os.getenv("FLASHSALE_TEST_MODE", "auto"))
+    parser.add_argument(
+        "--public-base-url",
+        default=os.getenv("FLASHSALE_PUBLIC_BASE_URL", ""),
+        help=(
+            "Single public edge URL, for example http://grupo2-egs.deti.ua.pt. "
+            "When set, host mode uses / for Composer, /auth, /payment-auth, /inventory and /payment."
+        ),
+    )
     parser.add_argument("--composer-base-url", default=os.getenv("COMPOSER_BASE_URL", "http://composer.flashsale"))
     parser.add_argument("--auth-base-url", default=os.getenv("AUTH_BASE_URL", "http://auth.flashsale"))
     parser.add_argument("--payment-auth-base-url", default=os.getenv("PAYMENT_AUTH_BASE_URL", "http://payment-auth.flashsale"))
     parser.add_argument("--inventory-base-url", default=os.getenv("INVENTORY_BASE_URL", "http://inventory.flashsale"))
     parser.add_argument("--payment-base-url", default=os.getenv("PAYMENT_BASE_URL", "http://payment.flashsale"))
+    parser.add_argument(
+        "--browser-return-to",
+        default=os.getenv("FLASHSALE_BROWSER_RETURN_TO", ""),
+        help=(
+            "Allowed return_to URL for /api/auth/browser/handoff. Defaults to the public base "
+            "when --public-base-url is set, otherwise http://localhost:5173/."
+        ),
+    )
     parser.add_argument("--composer-container", default=os.getenv("COMPOSER_CONTAINER", "composer"))
     parser.add_argument("--inventory-api-key", default=os.getenv("INVENTORY_API_KEY", "sk_test_inventory_dev_key"))
     parser.add_argument("--payment-api-key", default=os.getenv("PAYMENT_API_KEY", "admin-dev-key-2024"))
