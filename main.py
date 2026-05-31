@@ -811,10 +811,12 @@ async def list_events(request: Request, authorization: Optional[str] = Header(No
                         service_label="Inventory Service",
                         request=request)
 
-    # Enrich each event with min_price from its tickets
+    # Enrich a bounded subset with min_price. Each enrichment calls Inventory,
+    # so keep this capped to avoid turning one listing into a rate-limit burst.
     if isinstance(events_data, dict) and isinstance(events_data.get("data"), list):
+        enrich_limit = min(len(events_data["data"]), 24)
         async with httpx.AsyncClient(timeout=5.0) as client:
-            for ev in events_data["data"]:
+            for ev in events_data["data"][:enrich_limit]:
                 ev_id = ev.get("id")
                 if not ev_id:
                     continue
@@ -2317,10 +2319,13 @@ async def health_check():
 # ---------------------------------------------------------------------------
 _FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 _FRONTEND_ASSETS = os.path.join(_FRONTEND_DIST, "assets")
+_FRONTEND_IMAGES = os.path.join(_FRONTEND_DIST, "images")
 _FRONTEND_INDEX = os.path.join(_FRONTEND_DIST, "index.html")
 
 if os.path.isdir(_FRONTEND_ASSETS):
     app.mount("/assets", StaticFiles(directory=_FRONTEND_ASSETS), name="assets")
+if os.path.isdir(_FRONTEND_IMAGES):
+    app.mount("/images", StaticFiles(directory=_FRONTEND_IMAGES), name="images")
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

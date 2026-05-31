@@ -19,7 +19,15 @@ const WISHLIST_STORAGE_BY_USER_KEY = 'flashsale_wishlist_by_user_v1';
 const LEGACY_CART_STORAGE_KEY = 'flashsale_cart_v1';
 const LEGACY_WISHLIST_STORAGE_KEY = 'flashsale_wishlist_v1';
 const PENDING_CHECKOUT_STORAGE_KEY = 'flashsale_pending_checkout';
-const EVENT_IMAGE_ASSETS = ['/images/concert.png', '/images/festival.png', '/images/dj.png'];
+const EVENT_IMAGE_ASSETS = [
+  '/images/concert.png',
+  '/images/festival.png',
+  '/images/dj.png',
+  '/images/theater.png',
+  '/images/comedy.png',
+  '/images/sports.png',
+];
+const EVENT_LIST_LIMIT = 100;
 
 const buildPublicSubpathUrl = (baseUrl, path, query = {}) => {
   const base = new URL(baseUrl || window.location.origin);
@@ -273,6 +281,7 @@ const IconHeart = ({ filled = false }) => (
 
 function App() {
   const [events, setEvents] = useState([]);
+  const [eventTotalCount, setEventTotalCount] = useState(0);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [token, setToken] = useState(localStorage.getItem('flashsale_token'));
   const [user, setUser] = useState(null);
@@ -565,10 +574,21 @@ function App() {
   const fetchEvents = (activeToken = token) => {
     setLoadingEvents(true);
     setEventsError('');
-    const config = activeToken ? { headers: { Authorization: `Bearer ${activeToken}` } } : {};
+    const config = {
+      params: { limit: EVENT_LIST_LIMIT },
+      ...(activeToken ? { headers: { Authorization: `Bearer ${activeToken}` } } : {}),
+    };
     axios.get(`${API_BASE_URL}/api/events`, config)
-      .then((res) => { setEvents(res.data?.data || []); setLoadingEvents(false); })
-      .catch((err) => { setEventsError(extractErrorMessage(err, 'Could not load events')); setLoadingEvents(false); });
+      .then((res) => {
+        const nextEvents = res.data?.data || [];
+        setEvents(nextEvents);
+        setEventTotalCount(Number(res.data?.total ?? nextEvents.length));
+        setLoadingEvents(false);
+      })
+      .catch((err) => {
+        setEventsError(extractErrorMessage(err, 'Could not load events'));
+        setLoadingEvents(false);
+      });
   };
 
   const fetchProfile = async (activeToken) => {
@@ -778,7 +798,7 @@ function App() {
       setManagerTargetEventId(id);
       setManagerBatchEventId(id);
       setToast({ type: 'success', text: `Event created${id ? `: ${id.slice(0, 8)}…` : ''}.` });
-      fetchEvents();
+      fetchEvents(token);
     } catch (error) {
       setManagerError('Create event failed: ' + extractErrorMessage(error));
     } finally { setManagerLoading(false); }
@@ -791,7 +811,7 @@ function App() {
     try {
       await axios.put(`${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`, { status: managerTargetEventStatus }, { headers: { Authorization: `Bearer ${token}` } });
       setToast({ type: 'success', text: `Status updated to ${managerTargetEventStatus}.` });
-      fetchEvents();
+      fetchEvents(token);
     } catch (error) {
       setManagerError('Update failed: ' + extractErrorMessage(error));
     } finally { setManagerLoading(false); }
@@ -804,7 +824,7 @@ function App() {
     try {
       await axios.delete(`${API_BASE_URL}/api/events/${managerTargetEventId.trim()}`, { headers: { Authorization: `Bearer ${token}` } });
       setToast({ type: 'success', text: 'Event deleted.' });
-      fetchEvents();
+      fetchEvents(token);
     } catch (error) {
       setManagerError('Delete failed: ' + extractErrorMessage(error));
     } finally { setManagerLoading(false); }
@@ -1091,14 +1111,16 @@ function App() {
 
   const getEventFallbackImage = (ev) => {
     const seed = String(ev?.id || ev?.name || '');
-    const idx = seed ? seed.charCodeAt(0) % EVENT_IMAGE_ASSETS.length : 0;
+    const idx = seed
+      ? Array.from(seed).reduce((sum, char) => sum + char.charCodeAt(0), 0) % EVENT_IMAGE_ASSETS.length
+      : 0;
     return EVENT_IMAGE_ASSETS[idx];
   };
 
   const getEventBackgroundStyle = (ev) => {
     const fallback = getEventFallbackImage(ev);
     const remote = String(ev?.image_url || '').trim();
-    if (remote && /^https?:\/\//i.test(remote)) {
+    if (remote && (/^https?:\/\//i.test(remote) || remote.startsWith('/'))) {
       return { backgroundImage: `url("${remote}"), url("${fallback}")`, backgroundPosition: 'center', backgroundSize: 'cover' };
     }
     return { backgroundImage: `url("${fallback}")`, backgroundPosition: 'center', backgroundSize: 'cover' };
@@ -1129,10 +1151,11 @@ function App() {
   const firstName = (user?.full_name || user?.email || '').split(/[\s@]/)[0] || 'there';
   const initials = firstName.slice(0, 2).toUpperCase();
   const visibleMainView = mainView === 'account' && !token ? 'events' : mainView;
+  const eventDisplayCount = Math.max(eventTotalCount, events.length);
   const featuredEvent = events[0] || null;
   const featuredEventBgStyle = featuredEvent ? getEventBackgroundStyle(featuredEvent) : { backgroundImage: `url("${EVENT_IMAGE_ASSETS[1]}")`, backgroundPosition: 'center', backgroundSize: 'cover' };
   const mainViewTabs = [
-    { id: 'events', label: 'Eventos', note: events.length > 0 ? `${events.length} em cartaz` : 'Descobre o que ha' },
+    { id: 'events', label: 'Eventos', note: eventDisplayCount > 0 ? `${eventDisplayCount} em cartaz` : 'Descobre o que ha' },
     { id: 'wishlist', label: 'Favoritos', note: wishlistCount > 0 ? 'Guardados' : 'Para mais tarde', count: wishlistCount || null },
     { id: 'cart', label: 'Carrinho', note: cartTicketCount > 0 ? cartTotalLabel : 'O teu passe', count: cartTicketCount || null },
     ...(token ? [{ id: 'account', label: 'Conta', note: walletExists ? 'Encomendas e carteira' : 'Perfil e definicoes' }] : []),
@@ -1227,7 +1250,7 @@ function App() {
               </div>
             )}
             <div className="hero-stats">
-              <div className="hero-stat"><strong>{events.length}</strong><span>eventos</span></div>
+              <div className="hero-stat"><strong>{eventDisplayCount}</strong><span>eventos</span></div>
               <div className="hero-stat"><strong>{cartTicketCount}</strong><span>bilhetes no carrinho</span></div>
               <div className="hero-stat"><strong>{wishlistCount}</strong><span>favoritos</span></div>
             </div>
@@ -1270,9 +1293,9 @@ function App() {
           <div className="section-header editorial-header">
             <div>
               <h2>Em Cartaz</h2>
-              <p>{events.length > 0 ? `${events.length} evento(s) em cartaz.` : 'Vê o que vem a seguir.'}</p>
+              <p>{eventDisplayCount > 0 ? `${eventDisplayCount} evento(s) em cartaz.` : 'Vê o que vem a seguir.'}</p>
             </div>
-            <button className="btn btn-ghost btn-sm" onClick={fetchEvents}>Atualizar</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => fetchEvents(token)}>Atualizar</button>
           </div>
 
           {loadingEvents ? (
@@ -1289,7 +1312,7 @@ function App() {
                   <p>A seleção está a ser preparada. Em breve vais encontrar aqui os próximos concertos, festivais e noites de DJ.</p>
                 </div>
               )}
-              {events.slice(0, 12).map((ev, evIdx) => {
+              {events.map((ev, evIdx) => {
                 const qty = quantityByEvent[ev.id] || 1;
                 const buyingThis = checkoutLoadingEventId === ev.id;
                 const eventStatus = String(ev.status || '').toLowerCase();
